@@ -9,6 +9,8 @@ from database import create_database_client
 from dependencies import require_roles
 from security import get_jwt_secret_key
 from auth import router as auth_router
+from admin import router as admin_router
+from teams import router as teams_router
 
 
 @asynccontextmanager
@@ -26,6 +28,7 @@ async def lifespan(app: FastAPI):
             await client.admin.command("ping")
             await database["users"].find_one({}, {"_id": 1})
             await database["users"].create_index("email", unique=True)
+            await database["teams"].create_index("name", unique=True)
         except PyMongoError:
             raise RuntimeError(
                 "Database startup check failed"
@@ -62,6 +65,8 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 app.include_router(auth_router)
+app.include_router(admin_router)
+app.include_router(teams_router)
 
 
 @app.get("/health")

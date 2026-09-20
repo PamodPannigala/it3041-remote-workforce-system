@@ -59,6 +59,8 @@ async def register(payload: RegisterRequest, request: Request):
         name=user["name"],
         email=user["email"],
         role=user["role"],
+        is_active=user["is_active"],
+        team_id=None,
     )
 
 
@@ -120,4 +122,6 @@ async def get_my_profile(current_user: dict = Depends(get_current_user)):
         name=current_user["name"],
         email=current_user["email"],
         role=current_user["role"],
+        is_active=current_user.get("is_active", True),
+        team_id=str(current_user["team_id"]) if current_user.get("team_id") else None,
     )
