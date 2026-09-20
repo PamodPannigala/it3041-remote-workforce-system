@@ -4,9 +4,9 @@ A multi-agent remote workforce management web application.
 
 ---
 
-## Backend Setup & Instructions
+## 1. Backend Setup & Instructions
 
-### 1. Environment Variables
+### Environment Variables
 Configure a `.env` file inside the `backend/` directory with the following variable names (never commit secret values):
 - `MONGODB_HOST` — MongoDB cluster host URL
 - `MONGODB_USERNAME` — Database user
@@ -15,14 +15,14 @@ Configure a `.env` file inside the `backend/` directory with the following varia
 - `JWT_SECRET_KEY` — Cryptographic signing key for HS256 access tokens
 
 To generate a secure 256-bit random key locally without exposing it:
-```bash
+```powershell
 python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-### 2. Dependency Installation
+### Dependency Installation
 Activate your Python virtual environment and install packages:
 
-```bash
+```powershell
 # Production dependencies
 pip install -r backend/requirements.txt
 
@@ -30,32 +30,61 @@ pip install -r backend/requirements.txt
 pip install -r backend/requirements-dev.txt
 ```
 
-### 3. Running the Server
-Start the FastAPI server with auto-reload:
+### Running the Backend Server
+Start the FastAPI server on `http://127.0.0.1:8000`:
 
-```bash
+```powershell
 python -m uvicorn main:app --app-dir backend --reload
 ```
 
-Interactive API documentation will be available at `http://127.0.0.1:8000/docs`.
+Interactive OpenAPI documentation is available at `http://127.0.0.1:8000/docs`.
 
-### 4. Running Automated Tests & Checks
-Run the isolated automated test suite:
-
-```bash
+### Running Backend Tests
+```powershell
 pytest backend/tests
 ```
 
 Run baseline connectivity and security checks:
-
-```bash
+```powershell
 python backend/check_security.py
 python backend/check_db.py
 ```
 
 ---
 
-## API Endpoints & Role Permission Matrix
+## 2. Frontend Setup & Instructions
+
+The frontend is built with React and Vite, using Vanilla CSS for a polished, responsive user experience.
+
+### Dependency Installation
+```powershell
+cd frontend
+npm install
+```
+
+### Running the Frontend Development Server
+Start the Vite development server on `http://127.0.0.1:5173`:
+
+```powershell
+cd frontend
+npm run dev
+```
+
+> **Note on API Proxy:** In development mode, Vite automatically proxies `/api/*` requests to the local backend at `http://127.0.0.1:8000/*`. This proxy configuration is for local development only.
+
+### Running Frontend Tests & Production Build
+```powershell
+# Run Vitest test suite
+cd frontend
+npm test
+
+# Build production bundle
+npm run build
+```
+
+---
+
+## 3. API Endpoints & Role Permission Matrix
 
 | Endpoint | Method | Allowed Roles / Auth | Description |
 | :--- | :--- | :--- | :--- |
@@ -89,10 +118,10 @@ Content-Type: application/json
 
 ---
 
-## Current Architecture & Limitations
+## 4. Current Architecture & Session Limitations
 
-1. **Access Tokens & Expiration:** JWT access tokens are signed using `HS256` with strict claim verification (`sub`, `iat`, `exp`, `iss`, `aud`) and an expiration window of 15 minutes.
-2. **Dynamic Role Verification:** Token subject (`sub`) is resolved against the live database record on each request, ensuring role changes or account deactivations take effect immediately.
-3. **No Refresh Tokens / Revocation List:** Refresh tokens and immediate revocation token blocklists are not yet implemented.
-4. **Role Scope:** Current role checks verify global role levels (`employee`, `manager`, `admin`). Team-level or resource-level ownership constraints are not yet implemented.
-5. **Rate Limiting:** Rate limiting for login and registration attempts is not yet active.
+1. **In-Memory Session Storage:** JWT access tokens are stored strictly in-memory (React state) to prevent browser storage XSS exposure. Page reloads currently require signing in again.
+2. **Token Lifetime & Refresh:** Access tokens expire in 15 minutes. Refresh tokens and server-side token revocation blocklists are not yet implemented.
+3. **Dynamic Role Verification:** The backend resolves the token subject against the live database record on each request, ensuring role modifications or deactivations take effect immediately.
+4. **Role Scope:** Role guards enforce global levels (`employee`, `manager`, `admin`). Fine-grained record/team ownership constraints are not yet active.
+5. **Specialist AI Agents:** The four specialist agents (*Productivity, Collaboration, Wellbeing, Task Assignment*) are designated for development on their respective feature branches; no synthetic results are simulated.
