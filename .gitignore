@@ -14,6 +14,7 @@ __pycache__/
 node_modules/
 dist/
 coverage/
+.vite/
 
 # Logs and operating system files
 *.log
