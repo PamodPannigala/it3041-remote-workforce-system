@@ -1,15 +1,24 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pymongo.errors import PyMongoError
 
 from database import create_database_client
+from dependencies import require_roles
+from security import get_jwt_secret_key
 from auth import router as auth_router
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Verify JWT signing key is available at startup
+    try:
+        get_jwt_secret_key()
+    except Exception:
+        raise RuntimeError("Startup failed: missing or invalid JWT signing configuration") from None
+
     client, database = create_database_client()
 
     try:
@@ -54,6 +63,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 app.include_router(auth_router)
 
+
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
@@ -69,4 +79,17 @@ async def database_health(request: Request):
             detail="Database unavailable",
         ) from None
 
-    return {"status": "ok", "database": "connected"}
+    return {"status": "ok", "database": "connected"}
+
+
+@app.get("/admin/access-check", dependencies=[Depends(require_roles("admin"))])
+def admin_access_check():
+    return {"status": "ok", "access": "admin"}
+
+
+@app.get(
+    "/management/access-check",
+    dependencies=[Depends(require_roles("manager", "admin"))],
+)
+def management_access_check():
+    return {"status": "ok", "access": "management"}

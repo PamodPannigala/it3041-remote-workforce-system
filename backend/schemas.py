@@ -25,6 +25,19 @@ class RegisterRequest(BaseModel):
     password: SecretStr = Field(min_length=15, max_length=128)
 
 
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: EmailStr
+    password: SecretStr = Field(min_length=1, max_length=128)
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int = 900
+
+
 class UserResponse(BaseModel):
     id: str
     name: str
