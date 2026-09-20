@@ -34,7 +34,7 @@ pip install -r backend/requirements-dev.txt
 Start the FastAPI server on `http://127.0.0.1:8000`:
 
 ```powershell
-python -m uvicorn main:app --app-dir backend --reload
+uvicorn backend.app.main:app --reload
 ```
 
 Interactive OpenAPI documentation is available at `http://127.0.0.1:8000/docs`.
@@ -46,8 +46,8 @@ pytest backend/tests
 
 Run baseline connectivity and security checks:
 ```powershell
-python backend/check_security.py
-python backend/check_db.py
+python backend/scripts/check_security.py
+python backend/scripts/check_db.py
 ```
 
 ---

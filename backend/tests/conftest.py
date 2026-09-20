@@ -3,7 +3,7 @@ from bson import ObjectId
 from fastapi.testclient import TestClient
 from pymongo.errors import DuplicateKeyError
 
-from main import app
+from backend.app.main import app
 
 
 TEST_JWT_SECRET = "test-secret-key-that-is-at-least-32-bytes-long-for-hs256-testing!!"
