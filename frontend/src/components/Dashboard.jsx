@@ -16,6 +16,9 @@ import { getMyProfile, updateMyProfile } from "../api/profiles";
 import EmployeeProfileForm from "../features/profiles/EmployeeProfileForm";
 import ProfileSummary from "../features/profiles/ProfileSummary";
 import ManagerTeamProfiles from "../features/profiles/ManagerTeamProfiles";
+import EmployeeTasks from "../features/tasks/EmployeeTasks";
+import ManagerTaskBoard from "../features/tasks/ManagerTaskBoard";
+import AdminTaskAudit from "../features/tasks/AdminTaskAudit";
 
 import AppShell from "./layout/AppShell";
 import PageHeader from "./layout/PageHeader";
@@ -337,10 +340,13 @@ export default function Dashboard() {
       overview: "Overview",
       "my-team": "My Team",
       "work-profile": "Work Profile",
+      "my-tasks": "My Tasks",
       "managed-teams": "Managed Teams",
       "team-profiles": "Team Profiles",
+      "team-tasks": "Team Tasks",
       users: "User Directory",
       teams: "Team Management",
+      "task-audit": "Task Audit",
     };
     return titles[activeTab] || "Overview";
   };
@@ -551,6 +557,11 @@ export default function Dashboard() {
               )}
             </CardContent>
           </Card>
+        )}
+
+        {/* My Tasks Section */}
+        {activeTab === "my-tasks" && (
+          <EmployeeTasks token={token} onSessionExpired={handleSessionExpired} />
         )}
       </div>
     );
@@ -771,6 +782,15 @@ export default function Dashboard() {
         {/* Team Work Profiles Table */}
         {showTeamProfiles && (
           <ManagerTeamProfiles
+            managedTeams={managedTeams}
+            token={token}
+            onSessionExpired={handleSessionExpired}
+          />
+        )}
+
+        {/* Team Tasks Section */}
+        {activeTab === "team-tasks" && (
+          <ManagerTaskBoard
             managedTeams={managedTeams}
             token={token}
             onSessionExpired={handleSessionExpired}
@@ -1196,6 +1216,15 @@ export default function Dashboard() {
               </CardContent>
             </Card>
           </div>
+        )}
+
+        {/* Task Audit Section */}
+        {activeTab === "task-audit" && (
+          <AdminTaskAudit
+            adminTeams={adminTeams}
+            token={token}
+            onSessionExpired={handleSessionExpired}
+          />
         )}
       </div>
     );

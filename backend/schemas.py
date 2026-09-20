@@ -366,12 +366,27 @@ class AddBlockerRequest(BaseModel):
     ]
 
 
+class ResolveBlockerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resolution_note: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            min_length=1,
+            max_length=1000,
+        ),
+    ]
+
+
 class ProgressUpdateResponse(BaseModel):
     id: str
     user_id: str
     percentage: int
     notes: str
     logged_at: str
+    user_name: str | None = None
+    user_email: str | None = None
 
 
 class BlockerResponse(BaseModel):
@@ -379,9 +394,14 @@ class BlockerResponse(BaseModel):
     user_id: str
     description: str
     is_resolved: bool
+    resolution_note: str | None = None
     resolved_at: str | None = None
     resolved_by: str | None = None
     created_at: str
+    user_name: str | None = None
+    user_email: str | None = None
+    resolved_by_name: str | None = None
+    resolved_by_email: str | None = None
 
 
 class TaskResponse(BaseModel):
@@ -400,6 +420,11 @@ class TaskResponse(BaseModel):
     blockers: list[BlockerResponse] = []
     created_at: str | None = None
     updated_at: str | None = None
+    assigned_to_name: str | None = None
+    assigned_to_email: str | None = None
+    created_by_name: str | None = None
+    created_by_email: str | None = None
+    team_name: str | None = None
 
 
 class TaskListResponse(BaseModel):

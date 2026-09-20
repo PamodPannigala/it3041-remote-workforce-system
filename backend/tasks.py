@@ -11,6 +11,7 @@ from schemas import (
     BlockerResponse,
     CreateTaskRequest,
     ProgressUpdateResponse,
+    ResolveBlockerRequest,
     TaskListResponse,
     TaskResponse,
     UpdateTaskAssignmentRequest,
@@ -35,7 +36,14 @@ def _validate_object_id(id_str: str, field_name: str = "ID") -> ObjectId:
     return ObjectId(id_str)
 
 
-def _format_task_doc(doc: dict) -> TaskResponse:
+def _format_task_doc(
+    doc: dict,
+    user_map: dict | None = None,
+    team_map: dict | None = None,
+) -> TaskResponse:
+    user_map = user_map or {}
+    team_map = team_map or {}
+
     created_at = doc.get("created_at")
     if isinstance(created_at, datetime):
         created_at = created_at.isoformat()
@@ -62,13 +70,18 @@ def _format_task_doc(doc: dict) -> TaskResponse:
         elif p_logged is not None:
             p_logged = str(p_logged)
 
+        p_uid = str(p.get("user_id")) if p.get("user_id") is not None else ""
+        p_user = user_map.get(p_uid)
+
         progress_history.append(
             ProgressUpdateResponse(
                 id=str(p.get("id")),
-                user_id=str(p.get("user_id")),
+                user_id=p_uid,
                 percentage=int(p.get("percentage", 0)),
                 notes=p.get("notes", ""),
                 logged_at=p_logged or "",
+                user_name=p_user.get("name") if p_user else None,
+                user_email=p_user.get("email") if p_user else None,
             )
         )
 
@@ -86,27 +99,46 @@ def _format_task_doc(doc: dict) -> TaskResponse:
         elif b_resolved is not None:
             b_resolved = str(b_resolved)
 
-        b_resolver = str(b.get("resolved_by")) if b.get("resolved_by") else None
+        b_resolver_id = str(b.get("resolved_by")) if b.get("resolved_by") else None
+        b_resolution_note = b.get("resolution_note")
+        b_uid = str(b.get("user_id")) if b.get("user_id") is not None else ""
+
+        b_user = user_map.get(b_uid)
+        b_resolver_user = user_map.get(b_resolver_id) if b_resolver_id else None
 
         blockers.append(
             BlockerResponse(
                 id=str(b.get("id")),
-                user_id=str(b.get("user_id")),
+                user_id=b_uid,
                 description=b.get("description", ""),
                 is_resolved=bool(b.get("is_resolved", False)),
+                resolution_note=b_resolution_note,
                 resolved_at=b_resolved,
-                resolved_by=b_resolver,
+                resolved_by=b_resolver_id,
                 created_at=b_created or "",
+                user_name=b_user.get("name") if b_user else None,
+                user_email=b_user.get("email") if b_user else None,
+                resolved_by_name=b_resolver_user.get("name") if b_resolver_user else None,
+                resolved_by_email=b_resolver_user.get("email") if b_resolver_user else None,
             )
         )
+
+    assigned_to_id = str(doc["assigned_to"]) if doc.get("assigned_to") else None
+    assigned_user = user_map.get(assigned_to_id) if assigned_to_id else None
+
+    created_by_id = str(doc["created_by"]) if doc.get("created_by") else ""
+    created_user = user_map.get(created_by_id) if created_by_id else None
+
+    team_id_str = str(doc["team_id"]) if doc.get("team_id") else ""
+    team_obj = team_map.get(team_id_str)
 
     return TaskResponse(
         id=str(doc["_id"]),
         title=doc.get("title", ""),
         description=doc.get("description", ""),
-        team_id=str(doc["team_id"]),
-        created_by=str(doc["created_by"]),
-        assigned_to=str(doc["assigned_to"]) if doc.get("assigned_to") else None,
+        team_id=team_id_str,
+        created_by=created_by_id,
+        assigned_to=assigned_to_id,
         required_skills=doc.get("required_skills", []),
         priority=doc.get("priority", "medium"),
         status=doc.get("status", "todo"),
@@ -116,7 +148,84 @@ def _format_task_doc(doc: dict) -> TaskResponse:
         blockers=blockers,
         created_at=created_at,
         updated_at=updated_at,
+        assigned_to_name=assigned_user.get("name") if assigned_user else None,
+        assigned_to_email=assigned_user.get("email") if assigned_user else None,
+        created_by_name=created_user.get("name") if created_user else None,
+        created_by_email=created_user.get("email") if created_user else None,
+        team_name=team_obj.get("name") if team_obj else None,
     )
+
+
+async def _enrich_and_format_tasks(task_docs: list[dict], database) -> list[TaskResponse]:
+    if not task_docs:
+        return []
+
+    user_ids = set()
+    team_ids = set()
+
+    for doc in task_docs:
+        if doc.get("created_by"):
+            user_ids.add(doc["created_by"])
+        if doc.get("assigned_to"):
+            user_ids.add(doc["assigned_to"])
+        if doc.get("team_id"):
+            team_ids.add(doc["team_id"])
+        for b in doc.get("blockers", []):
+            if b.get("user_id"):
+                user_ids.add(b["user_id"])
+            if b.get("resolved_by"):
+                user_ids.add(b["resolved_by"])
+        for p in doc.get("progress_history", []):
+            if p.get("user_id"):
+                user_ids.add(p["user_id"])
+
+    user_oids = [
+        uid if isinstance(uid, ObjectId) else ObjectId(str(uid))
+        for uid in user_ids
+        if uid and ObjectId.is_valid(str(uid))
+    ]
+    team_oids = [
+        tid if isinstance(tid, ObjectId) else ObjectId(str(tid))
+        for tid in team_ids
+        if tid and ObjectId.is_valid(str(tid))
+    ]
+
+    user_map = {}
+    if user_oids:
+        u_cursor = database["users"].find({"_id": {"$in": user_oids}})
+        if hasattr(u_cursor, "to_list"):
+            u_docs = await u_cursor.to_list(length=len(user_oids) + 10)
+        elif hasattr(u_cursor, "__aiter__"):
+            u_docs = [u async for u in u_cursor]
+        else:
+            u_docs = [
+                u for u in getattr(database["users"], "docs", [])
+                if u.get("_id") in user_oids
+            ]
+        for u in u_docs:
+            user_map[str(u["_id"])] = u
+
+    team_map = {}
+    if team_oids:
+        t_cursor = database["teams"].find({"_id": {"$in": team_oids}})
+        if hasattr(t_cursor, "to_list"):
+            t_docs = await t_cursor.to_list(length=len(team_oids) + 10)
+        elif hasattr(t_cursor, "__aiter__"):
+            t_docs = [t async for t in t_cursor]
+        else:
+            t_docs = [
+                t for t in getattr(database["teams"], "docs", [])
+                if t.get("_id") in team_oids
+            ]
+        for t in t_docs:
+            team_map[str(t["_id"])] = t
+
+    return [_format_task_doc(doc, user_map=user_map, team_map=team_map) for doc in task_docs]
+
+
+async def _enrich_and_format_task(task_doc: dict, database) -> TaskResponse:
+    results = await _enrich_and_format_tasks([task_doc], database)
+    return results[0]
 
 
 @router.post(
@@ -202,7 +311,7 @@ async def create_task(
 
     res = await database["tasks"].insert_one(task_doc)
     task_doc["_id"] = getattr(res, "inserted_id", task_doc.get("_id"))
-    return _format_task_doc(task_doc)
+    return await _enrich_and_format_task(task_doc, database)
 
 
 @router.get(
@@ -267,7 +376,7 @@ async def get_managed_tasks(
     else:
         task_docs = getattr(database["tasks"], "docs", [])[skip : skip + limit]
 
-    items = [_format_task_doc(doc) for doc in task_docs]
+    items = await _enrich_and_format_tasks(task_docs, database)
     return TaskListResponse(
         items=items,
         total=total,
@@ -312,7 +421,7 @@ async def get_my_tasks(
     else:
         task_docs = getattr(database["tasks"], "docs", [])[skip : skip + limit]
 
-    items = [_format_task_doc(doc) for doc in task_docs]
+    items = await _enrich_and_format_tasks(task_docs, database)
     return TaskListResponse(
         items=items,
         total=total,
@@ -359,7 +468,7 @@ async def get_task_by_id(
                 detail="Access denied: You do not manage this task's team",
             )
 
-    return _format_task_doc(task)
+    return await _enrich_and_format_task(task, database)
 
 
 @router.patch(
@@ -425,7 +534,7 @@ async def update_task_metadata(
     )
 
     task.update(update_fields)
-    return _format_task_doc(task)
+    return await _enrich_and_format_task(task, database)
 
 
 @router.patch(
@@ -494,7 +603,7 @@ async def update_task_assignment(
     )
 
     task.update(update_fields)
-    return _format_task_doc(task)
+    return await _enrich_and_format_task(task, database)
 
 
 @router.patch(
@@ -546,13 +655,31 @@ async def update_task_status(
         "updated_at": datetime.now(timezone.utc),
     }
 
+    # Completed-task consistency rule: completed status implies 100% progress
+    if payload.status == "completed":
+        progress_history = list(task.get("progress_history", []))
+        latest_pct = (
+            progress_history[-1].get("percentage", 0) if progress_history else 0
+        )
+        if latest_pct < 100:
+            progress_history.append(
+                {
+                    "id": uuid.uuid4().hex,
+                    "user_id": current_user["_id"],
+                    "percentage": 100,
+                    "notes": "Task completed",
+                    "logged_at": update_fields["updated_at"],
+                }
+            )
+            update_fields["progress_history"] = progress_history
+
     await database["tasks"].update_one(
         {"_id": task_oid},
         {"$set": update_fields},
     )
 
     task.update(update_fields)
-    return _format_task_doc(task)
+    return await _enrich_and_format_task(task, database)
 
 
 @router.post(
@@ -613,7 +740,7 @@ async def add_task_progress(
     )
 
     task.update(update_fields)
-    return _format_task_doc(task)
+    return await _enrich_and_format_task(task, database)
 
 
 @router.post(
@@ -657,6 +784,7 @@ async def add_task_blocker(
         "user_id": current_user["_id"],
         "description": payload.description,
         "is_resolved": False,
+        "resolution_note": None,
         "resolved_at": None,
         "resolved_by": None,
         "created_at": now,
@@ -677,7 +805,7 @@ async def add_task_blocker(
     )
 
     task.update(update_fields)
-    return _format_task_doc(task)
+    return await _enrich_and_format_task(task, database)
 
 
 @router.patch(
@@ -689,6 +817,7 @@ async def add_task_blocker(
 async def resolve_task_blocker(
     task_id: str,
     blocker_id: str,
+    payload: ResolveBlockerRequest,
     request: Request,
     current_user: dict = Depends(get_current_user),
 ):
@@ -723,16 +852,20 @@ async def resolve_task_blocker(
             detail="Blocker not found",
         )
 
+    if found_blocker.get("is_resolved", False):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Blocker is already resolved",
+        )
+
     now = datetime.now(timezone.utc)
-    if not found_blocker.get("is_resolved", False):
-        found_blocker["is_resolved"] = True
-        found_blocker["resolved_at"] = now
-        found_blocker["resolved_by"] = current_user["_id"]
+    found_blocker["is_resolved"] = True
+    found_blocker["resolution_note"] = payload.resolution_note
+    found_blocker["resolved_at"] = now
+    found_blocker["resolved_by"] = current_user["_id"]
 
     remaining_unresolved = [b for b in blockers if not b.get("is_resolved", False)]
-    new_status = task.get("status")
-    if len(remaining_unresolved) == 0:
-        new_status = "in_progress"
+    new_status = "in_progress" if len(remaining_unresolved) == 0 else "blocked"
 
     update_fields = {
         "blockers": blockers,
@@ -746,7 +879,7 @@ async def resolve_task_blocker(
     )
 
     task.update(update_fields)
-    return _format_task_doc(task)
+    return await _enrich_and_format_task(task, database)
 
 
 # =========================================================================
@@ -790,7 +923,7 @@ async def admin_list_tasks(
     else:
         task_docs = getattr(database["tasks"], "docs", [])[skip : skip + limit]
 
-    items = [_format_task_doc(doc) for doc in task_docs]
+    items = await _enrich_and_format_tasks(task_docs, database)
     return TaskListResponse(
         items=items,
         total=total,
@@ -820,4 +953,4 @@ async def admin_get_task(
             detail="Task not found",
         )
 
-    return _format_task_doc(task)
+    return await _enrich_and_format_task(task, database)

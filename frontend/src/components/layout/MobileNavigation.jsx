@@ -19,17 +19,20 @@ export default function MobileNavigation({
       { id: "overview", label: "Overview" },
       { id: "my-team", label: "My Team" },
       { id: "work-profile", label: "Work Profile" },
+      { id: "my-tasks", label: "My Tasks" },
     ],
     manager: [
       { id: "overview", label: "Overview" },
       { id: "managed-teams", label: "Managed Teams" },
       { id: "work-profile", label: "Work Profile" },
       { id: "team-profiles", label: "Team Profiles" },
+      { id: "team-tasks", label: "Team Tasks" },
     ],
     admin: [
       { id: "overview", label: "Overview" },
       { id: "users", label: "Users" },
       { id: "teams", label: "Teams" },
+      { id: "task-audit", label: "Task Audit" },
     ],
   };
 
