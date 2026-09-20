@@ -6,7 +6,7 @@ import RegisterForm from "./components/RegisterForm";
 import Dashboard from "./components/Dashboard";
 
 function AppContent() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, initialLoading } = useAuth();
   const [view, setView] = useState("login"); // "login" | "register"
   const [successMessage, setSuccessMessage] = useState("");
 
@@ -23,6 +23,23 @@ function AppContent() {
     setSuccessMessage(message);
     setView("login");
   };
+
+  if (initialLoading) {
+    return (
+      <div className="app-container">
+        <Navbar />
+        <main className="main-content">
+          <div style={{ textAlign: "center", padding: "3rem" }}>
+            <div className="spinner" style={{ width: "2rem", height: "2rem", borderWidth: "3px" }}></div>
+            <p style={{ marginTop: "1rem", color: "var(--text-secondary)" }}>Verifying session...</p>
+          </div>
+        </main>
+        <footer className="footer">
+          <p>IT3041 Remote Workforce System</p>
+        </footer>
+      </div>
+    );
+  }
 
   return (
     <div className="app-container">
@@ -47,7 +64,7 @@ function AppContent() {
       )}
 
       <footer className="footer">
-        <p>IT3041 Remote Workforce System • Milestone 3 Frontend Auth & Dashboard</p>
+        <p>IT3041 Remote Workforce System</p>
       </footer>
     </div>
   );
