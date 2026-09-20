@@ -593,4 +593,3 @@ async def remove_team_member(
         )
 
     return {"status": "ok", "message": "Member removed from team"}
-
