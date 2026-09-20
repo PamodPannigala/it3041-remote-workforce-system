@@ -30,6 +30,18 @@ export default function Badge({
     danger: "bg-rose-50 text-rose-700 border border-rose-200 font-medium",
     info: "bg-cyan-50 text-cyan-700 border border-cyan-200 font-medium",
     slate: "bg-slate-100 text-slate-600 border border-slate-200 font-medium",
+
+    // Task Status Badges
+    todo: "bg-slate-100 text-slate-700 border border-slate-300 font-medium",
+    in_progress: "bg-blue-50 text-blue-700 border border-blue-200 font-medium",
+    blocked: "bg-rose-50 text-rose-700 border border-rose-200 font-semibold",
+    completed: "bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium",
+
+    // Task Priority Badges
+    low: "bg-slate-50 text-slate-600 border border-slate-200 font-medium",
+    medium: "bg-blue-50 text-blue-700 border border-blue-200 font-medium",
+    high: "bg-amber-50 text-amber-800 border border-amber-200 font-medium",
+    urgent: "bg-rose-50 text-rose-700 border border-rose-200 font-semibold",
   };
 
   const dotColors = {
@@ -41,6 +53,14 @@ export default function Badge({
     employee: "bg-blue-500",
     manager: "bg-amber-500",
     admin: "bg-violet-500",
+    todo: "bg-slate-400",
+    in_progress: "bg-blue-500",
+    blocked: "bg-rose-500",
+    completed: "bg-emerald-500",
+    low: "bg-slate-400",
+    medium: "bg-blue-500",
+    high: "bg-amber-500",
+    urgent: "bg-rose-500",
     default: "bg-slate-400",
   };
 
