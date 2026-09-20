@@ -66,7 +66,9 @@ class FakeAsyncCollection:
         self.docs = []
         self.indexes = {}
 
-    async def create_index(self, key: str, unique: bool = False):
+    async def create_index(self, key, unique: bool = False):
+        if isinstance(key, list):
+            key = tuple(key)
         self.indexes[key] = {"unique": unique}
 
     async def count_documents(self, filter_query: dict | None = None) -> int:
@@ -143,7 +145,11 @@ def fake_db():
     db["users"].indexes["email"] = {"unique": True}
     db["teams"].indexes["name"] = {"unique": True}
     db["employee_profiles"].indexes["user_id"] = {"unique": True}
+    db["tasks"].indexes[tuple([("team_id", 1), ("status", 1)])] = {"unique": False}
+    db["tasks"].indexes[tuple([("assigned_to", 1), ("status", 1)])] = {"unique": False}
+    db["tasks"].indexes["due_date"] = {"unique": False}
     return db
+
 
 
 

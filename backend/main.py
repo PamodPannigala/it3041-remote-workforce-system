@@ -12,6 +12,7 @@ from auth import router as auth_router
 from admin import router as admin_router
 from teams import router as teams_router
 from profiles import router as profiles_router
+from tasks import router as tasks_router, admin_tasks_router
 
 
 @asynccontextmanager
@@ -31,6 +32,9 @@ async def lifespan(app: FastAPI):
             await database["users"].create_index("email", unique=True)
             await database["teams"].create_index("name", unique=True)
             await database["employee_profiles"].create_index("user_id", unique=True)
+            await database["tasks"].create_index([("team_id", 1), ("status", 1)])
+            await database["tasks"].create_index([("assigned_to", 1), ("status", 1)])
+            await database["tasks"].create_index("due_date")
         except PyMongoError:
             raise RuntimeError(
                 "Database startup check failed"
@@ -72,11 +76,13 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(status_code=422, content={"detail": sanitized_errors})
 
 
-
 app.include_router(auth_router)
 app.include_router(admin_router)
+app.include_router(admin_tasks_router)
 app.include_router(teams_router)
 app.include_router(profiles_router)
+app.include_router(tasks_router)
+
 
 
 

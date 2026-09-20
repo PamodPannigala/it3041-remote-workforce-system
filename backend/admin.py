@@ -160,6 +160,17 @@ async def update_user_role(
                 detail=f"User is assigned as manager of team '{managed_team.get('name', 'Unknown')}'. Reassign the team before changing this user's role.",
             )
 
+    # Prevent changing role of employee with open assigned tasks
+    if target_user.get("role") == "employee" and payload.role != "employee":
+        open_tasks = await database["tasks"].count_documents(
+            {"assigned_to": target_oid, "status": {"$in": ["todo", "in_progress", "blocked"]}}
+        )
+        if open_tasks > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot change role of an employee with open assigned tasks. Unassign or reassign tasks first.",
+            )
+
     update_fields = {"role": payload.role}
     # If role changed to non-employee, clear team_id
     if payload.role != "employee" and target_user.get("team_id"):
@@ -232,6 +243,18 @@ async def update_user_status(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"User is assigned as manager of team '{managed_team.get('name', 'Unknown')}'. Reassign the team before deactivating this user.",
             )
+
+    # Prevent deactivating employee with open assigned tasks
+    if not payload.is_active and target_user.get("role") == "employee":
+        open_tasks = await database["tasks"].count_documents(
+            {"assigned_to": target_oid, "status": {"$in": ["todo", "in_progress", "blocked"]}}
+        )
+        if open_tasks > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot deactivate an employee with open assigned tasks. Unassign or reassign tasks first.",
+            )
+
 
     await database["users"].update_one(
         {"_id": target_oid},
@@ -475,6 +498,17 @@ async def assign_team_member(
             detail="Cannot assign an inactive employee to a team.",
         )
 
+    # Prevent moving employee with open assigned tasks to another team
+    if user.get("team_id") and user.get("team_id") != team_oid:
+        open_tasks = await database["tasks"].count_documents(
+            {"assigned_to": user_oid, "status": {"$in": ["todo", "in_progress", "blocked"]}}
+        )
+        if open_tasks > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot transfer an employee with open assigned tasks to another team. Unassign or reassign tasks first.",
+            )
+
     # Assign/reassign employee to team (employee belongs to at most one team)
     await database["users"].update_one(
         {"_id": user_oid},
@@ -544,9 +578,19 @@ async def remove_team_member(
         )
 
     if user.get("team_id") == team_oid:
+        open_tasks = await database["tasks"].count_documents(
+            {"assigned_to": user_oid, "status": {"$in": ["todo", "in_progress", "blocked"]}}
+        )
+        if open_tasks > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot remove an employee with open assigned tasks from their team. Unassign or reassign tasks first.",
+            )
+
         await database["users"].update_one(
             {"_id": user_oid},
             {"$set": {"team_id": None}},
         )
 
     return {"status": "ok", "message": "Member removed from team"}
+
