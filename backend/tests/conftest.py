@@ -142,7 +142,9 @@ def fake_db():
     db = FakeAsyncDatabase()
     db["users"].indexes["email"] = {"unique": True}
     db["teams"].indexes["name"] = {"unique": True}
+    db["employee_profiles"].indexes["user_id"] = {"unique": True}
     return db
+
 
 
 @pytest.fixture

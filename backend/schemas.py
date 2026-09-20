@@ -7,7 +7,9 @@ from pydantic import (
     Field,
     SecretStr,
     StringConstraints,
+    field_validator,
 )
+
 
 
 class RegisterRequest(BaseModel):
@@ -138,3 +140,59 @@ class EmployeeTeamSummaryResponse(BaseModel):
     team_name: str | None = None
     manager_name: str | None = None
     manager_email: str | None = None
+
+
+class UpdateEmployeeProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_title: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            min_length=1,
+            max_length=100,
+        ),
+    ]
+    skills: list[str] = Field(default_factory=list)
+    availability_status: Literal["available", "busy", "on_leave"] = "available"
+    weekly_capacity_hours: float = Field(default=40.0, ge=0.0, le=80.0)
+
+    @field_validator("skills", mode="before")
+    @classmethod
+    def validate_and_normalize_skills(cls, v):
+        if not isinstance(v, list):
+            raise ValueError("Skills must be a list of strings")
+        normalized = []
+        seen = set()
+        for item in v:
+            if not isinstance(item, str):
+                raise ValueError("Each skill must be a string")
+            trimmed = item.strip()
+            if not trimmed:
+                raise ValueError("Skill item cannot be empty or whitespace only")
+            if len(trimmed) > 50:
+                raise ValueError("Skill item cannot exceed 50 characters")
+            key = trimmed.lower()
+            if key not in seen:
+                seen.add(key)
+                normalized.append(trimmed)
+        return normalized
+
+
+class EmployeeProfileResponse(BaseModel):
+    id: str
+    user_id: str
+    job_title: str
+    skills: list[str]
+    availability_status: Literal["available", "busy", "on_leave"]
+    weekly_capacity_hours: float
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class EmployeeProfileListResponse(BaseModel):
+    items: list[EmployeeProfileResponse]
+    total: int
+    page: int
+    limit: int
+    total_pages: int
