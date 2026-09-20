@@ -1,10 +1,10 @@
 import React, { useState } from "react";
-import { AuthProvider, useAuth } from "./context/AuthContext";
-import Navbar from "./components/Navbar";
-import AuthHero from "./components/AuthHero";
-import LoginForm from "./components/LoginForm";
-import RegisterForm from "./components/RegisterForm";
-import Dashboard from "./components/Dashboard";
+import { AuthProvider, useAuth } from "./features/auth/AuthContext";
+import Navbar from "./features/auth/components/Navbar";
+import AuthHero from "./features/auth/components/AuthHero";
+import LoginForm from "./features/auth/components/LoginForm";
+import RegisterForm from "./features/auth/components/RegisterForm";
+import Dashboard from "./pages/Dashboard";
 
 function AppContent() {
   const { isAuthenticated, initialLoading } = useAuth();
