@@ -837,7 +837,6 @@ describe("AdminTaskAudit Component", () => {
     const inspectBtns = await screen.findAllByRole("button", { name: /inspect/i });
     // Inspect second task (Unassigned Backlog Deliverable)
     await user.click(inspectBtns[1]);
-
     expect(screen.getByRole("heading", { name: /unassigned backlog deliverable/i })).toBeInTheDocument();
     expect(screen.getByText("Unassigned")).toBeInTheDocument();
   });
