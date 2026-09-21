@@ -433,3 +433,53 @@ class TaskListResponse(BaseModel):
     page: int
     limit: int
     total_pages: int
+
+
+class CreateCollaborationMessageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    team_id: str
+    content: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            min_length=1,
+            max_length=4000,
+        ),
+    ]
+
+
+class UpdateCollaborationMessageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            min_length=1,
+            max_length=4000,
+        ),
+    ]
+
+
+class CollaborationMessageResponse(BaseModel):
+    id: str
+    team_id: str
+    sender_id: str
+    content: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    edited_at: str | None = None
+    is_deleted: bool = False
+    deleted_at: str | None = None
+    sender_name: str | None = None
+    sender_email: str | None = None
+    team_name: str | None = None
+
+
+class CollaborationMessageListResponse(BaseModel):
+    items: list[CollaborationMessageResponse] = Field(default_factory=list)
+    total: int
+    page: int
+    limit: int
+    total_pages: int

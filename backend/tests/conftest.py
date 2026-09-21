@@ -33,6 +33,25 @@ class FakeAsyncCursor:
         self._skip = 0
         self._limit = None
 
+    def sort(self, key_or_list, direction=1):
+        if isinstance(key_or_list, str):
+            sort_fields = [(key_or_list, direction)]
+        elif isinstance(key_or_list, (list, tuple)):
+            sort_fields = list(key_or_list)
+        else:
+            return self
+
+        for field, order in reversed(sort_fields):
+            reverse = order == -1 or order == "desc" or order == "DESC"
+            self._docs.sort(
+                key=lambda d: (
+                    (d.get(field) is not None),
+                    str(d.get(field)) if d.get(field) is not None else "",
+                ),
+                reverse=reverse,
+            )
+        return self
+
     def skip(self, count: int):
         self._skip = count
         return self
@@ -148,7 +167,10 @@ def fake_db():
     db["tasks"].indexes[tuple([("team_id", 1), ("status", 1)])] = {"unique": False}
     db["tasks"].indexes[tuple([("assigned_to", 1), ("status", 1)])] = {"unique": False}
     db["tasks"].indexes["due_date"] = {"unique": False}
+    db["collaboration_messages"].indexes[tuple([("team_id", 1), ("created_at", -1)])] = {"unique": False}
+    db["collaboration_messages"].indexes[tuple([("sender_id", 1), ("created_at", -1)])] = {"unique": False}
     return db
+
 
 
 
