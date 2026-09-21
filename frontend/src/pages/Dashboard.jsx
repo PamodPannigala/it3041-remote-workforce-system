@@ -21,6 +21,9 @@ import ManagerTaskBoard from "../features/tasks/components/ManagerTaskBoard";
 import AdminTaskAudit from "../features/tasks/components/AdminTaskAudit";
 import TeamMessages from "../features/collaboration/components/TeamMessages";
 import AdminMessageAudit from "../features/collaboration/components/AdminMessageAudit";
+import EmployeePulseSurvey from "../features/pulse-surveys/components/EmployeePulseSurvey";
+import ManagerPulseInsights from "../features/pulse-surveys/components/ManagerPulseInsights";
+import AdminPulseAudit from "../features/pulse-surveys/components/AdminPulseAudit";
 
 import AppShell from "../layouts/AppShell";
 import PageHeader from "../layouts/PageHeader";
@@ -351,6 +354,9 @@ export default function Dashboard() {
       "task-audit": "Task Audit",
       "team-messages": "Team Messages",
       "message-audit": "Message Audit",
+      "weekly-pulse": "Weekly Pulse Survey",
+      "pulse-insights": "Team Pulse Insights",
+      "pulse-audit": "Pulse Survey Audit",
     };
     return titles[activeTab] || "Overview";
   };
@@ -571,6 +577,16 @@ export default function Dashboard() {
         {/* Team Messages Section */}
         {activeTab === "team-messages" && (
           <TeamMessages
+            user={user}
+            token={token}
+            onSessionExpired={handleSessionExpired}
+            assignedTeam={employeeTeamSummary}
+          />
+        )}
+
+        {/* Weekly Pulse Section */}
+        {activeTab === "weekly-pulse" && (
+          <EmployeePulseSurvey
             user={user}
             token={token}
             onSessionExpired={handleSessionExpired}
@@ -814,6 +830,16 @@ export default function Dashboard() {
         {/* Team Messages Section */}
         {activeTab === "team-messages" && (
           <TeamMessages
+            user={user}
+            token={token}
+            onSessionExpired={handleSessionExpired}
+            managedTeams={managedTeams}
+          />
+        )}
+
+        {/* Pulse Insights Section */}
+        {activeTab === "pulse-insights" && (
+          <ManagerPulseInsights
             user={user}
             token={token}
             onSessionExpired={handleSessionExpired}
@@ -1254,6 +1280,15 @@ export default function Dashboard() {
         {/* Message Audit Section */}
         {activeTab === "message-audit" && (
           <AdminMessageAudit
+            adminTeams={adminTeams}
+            token={token}
+            onSessionExpired={handleSessionExpired}
+          />
+        )}
+
+        {/* Pulse Audit Section */}
+        {activeTab === "pulse-audit" && (
+          <AdminPulseAudit
             adminTeams={adminTeams}
             token={token}
             onSessionExpired={handleSessionExpired}
