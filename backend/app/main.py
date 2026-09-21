@@ -13,6 +13,10 @@ from backend.app.modules.admin.router import router as admin_router
 from backend.app.modules.teams.router import router as teams_router
 from backend.app.modules.profiles.router import router as profiles_router
 from backend.app.modules.tasks.router import router as tasks_router, admin_tasks_router
+from backend.app.modules.collaboration.router import (
+    router as collaboration_router,
+    admin_collaboration_router,
+)
 
 
 
@@ -36,6 +40,12 @@ async def lifespan(app: FastAPI):
             await database["tasks"].create_index([("team_id", 1), ("status", 1)])
             await database["tasks"].create_index([("assigned_to", 1), ("status", 1)])
             await database["tasks"].create_index("due_date")
+            await database["collaboration_messages"].create_index(
+                [("team_id", 1), ("created_at", -1)]
+            )
+            await database["collaboration_messages"].create_index(
+                [("sender_id", 1), ("created_at", -1)]
+            )
         except PyMongoError:
             raise RuntimeError(
                 "Database startup check failed"
@@ -80,9 +90,12 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(admin_tasks_router)
+app.include_router(admin_collaboration_router)
 app.include_router(teams_router)
 app.include_router(profiles_router)
 app.include_router(tasks_router)
+app.include_router(collaboration_router)
+
 
 
 
