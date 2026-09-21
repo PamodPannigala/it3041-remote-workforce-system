@@ -85,14 +85,27 @@ export async function getAdminTeams(token) {
   return await handleResponse(response);
 }
 
-export async function createTeam(token, name, managerId) {
+export async function createTeam(token, teamDataOrName, managerId) {
+  let body;
+  if (typeof teamDataOrName === "object" && teamDataOrName !== null) {
+    body = {
+      name: teamDataOrName.name,
+      manager_id: teamDataOrName.manager_id || teamDataOrName.managerId,
+    };
+  } else {
+    body = {
+      name: teamDataOrName,
+      manager_id: managerId,
+    };
+  }
+
   const response = await fetch("/api/admin/teams", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ name, manager_id: managerId }),
+    body: JSON.stringify(body),
   });
   return await handleResponse(response);
 }
