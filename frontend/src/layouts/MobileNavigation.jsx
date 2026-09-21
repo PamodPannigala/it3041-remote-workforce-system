@@ -20,6 +20,7 @@ export default function MobileNavigation({
       { id: "my-team", label: "My Team" },
       { id: "work-profile", label: "Work Profile" },
       { id: "my-tasks", label: "My Tasks" },
+      { id: "team-messages", label: "Team Messages" },
     ],
     manager: [
       { id: "overview", label: "Overview" },
@@ -27,12 +28,14 @@ export default function MobileNavigation({
       { id: "work-profile", label: "Work Profile" },
       { id: "team-profiles", label: "Team Profiles" },
       { id: "team-tasks", label: "Team Tasks" },
+      { id: "team-messages", label: "Team Messages" },
     ],
     admin: [
       { id: "overview", label: "Overview" },
       { id: "users", label: "Users" },
       { id: "teams", label: "Teams" },
       { id: "task-audit", label: "Task Audit" },
+      { id: "message-audit", label: "Message Audit" },
     ],
   };
 
