@@ -17,6 +17,10 @@ from backend.app.modules.collaboration.router import (
     router as collaboration_router,
     admin_collaboration_router,
 )
+from backend.app.modules.pulse_surveys.router import (
+    router as pulse_surveys_router,
+    admin_pulse_surveys_router,
+)
 
 
 
@@ -45,6 +49,12 @@ async def lifespan(app: FastAPI):
             )
             await database["collaboration_messages"].create_index(
                 [("sender_id", 1), ("created_at", -1)]
+            )
+            await database["weekly_pulse_responses"].create_index(
+                [("user_id", 1), ("week_start", -1)], unique=True
+            )
+            await database["weekly_pulse_responses"].create_index(
+                [("team_id", 1), ("week_start", -1)]
             )
         except PyMongoError:
             raise RuntimeError(
@@ -91,10 +101,12 @@ app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(admin_tasks_router)
 app.include_router(admin_collaboration_router)
+app.include_router(admin_pulse_surveys_router)
 app.include_router(teams_router)
 app.include_router(profiles_router)
 app.include_router(tasks_router)
 app.include_router(collaboration_router)
+app.include_router(pulse_surveys_router)
 
 
 

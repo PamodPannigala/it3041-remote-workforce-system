@@ -107,13 +107,24 @@ class FakeAsyncCollection:
         # Check unique indexes
         for idx_key, idx_meta in self.indexes.items():
             if idx_meta.get("unique"):
-                val = doc.get(idx_key)
-                if val is not None:
-                    for existing in self.docs:
-                        if existing.get(idx_key) == val:
-                            raise DuplicateKeyError(
-                                f"E11000 duplicate key error collection: test.{self.name} index: {idx_key} dup key: {{ {idx_key}: '{val}' }}"
-                            )
+                if isinstance(idx_key, (tuple, list)):
+                    field_names = [k[0] if isinstance(k, (tuple, list)) else k for k in idx_key]
+                    doc_vals = tuple(doc.get(f) for f in field_names)
+                    if all(v is not None for v in doc_vals):
+                        for existing in self.docs:
+                            existing_vals = tuple(existing.get(f) for f in field_names)
+                            if existing_vals == doc_vals:
+                                raise DuplicateKeyError(
+                                    f"E11000 duplicate key error collection: test.{self.name} index: {idx_key} dup key: {dict(zip(field_names, doc_vals))}"
+                                )
+                else:
+                    val = doc.get(idx_key)
+                    if val is not None:
+                        for existing in self.docs:
+                            if existing.get(idx_key) == val:
+                                raise DuplicateKeyError(
+                                    f"E11000 duplicate key error collection: test.{self.name} index: {idx_key} dup key: {{ {idx_key}: '{val}' }}"
+                                )
 
         doc_copy = dict(doc)
         if "_id" not in doc_copy:
@@ -169,6 +180,8 @@ def fake_db():
     db["tasks"].indexes["due_date"] = {"unique": False}
     db["collaboration_messages"].indexes[tuple([("team_id", 1), ("created_at", -1)])] = {"unique": False}
     db["collaboration_messages"].indexes[tuple([("sender_id", 1), ("created_at", -1)])] = {"unique": False}
+    db["weekly_pulse_responses"].indexes[tuple([("user_id", 1), ("week_start", -1)])] = {"unique": True}
+    db["weekly_pulse_responses"].indexes[tuple([("team_id", 1), ("week_start", -1)])] = {"unique": False}
     return db
 
 
