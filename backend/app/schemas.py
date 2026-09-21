@@ -609,3 +609,29 @@ class PulseAuditListResponse(BaseModel):
 class AdminPulseSummaryResponse(BaseModel):
     week_start: str
     items: list[PulseTeamSummaryResponse] = Field(default_factory=list)
+
+
+# =========================================================================
+# Information Retrieval Schemas
+# =========================================================================
+
+
+class SearchResultItem(BaseModel):
+    source_type: Literal["task", "collaboration"]
+    record_id: str
+    title: str | None = None
+    snippet: str
+    score: float
+    matched_terms: list[str] = Field(default_factory=list)
+    team_id: str | None = None
+    team_name: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class SearchResponse(BaseModel):
+    query: str
+    source: Literal["all", "tasks", "collaboration"]
+    total_candidates: int
+    total_matches: int
+    results: list[SearchResultItem] = Field(default_factory=list)

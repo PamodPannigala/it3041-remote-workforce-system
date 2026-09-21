@@ -21,6 +21,9 @@ from backend.app.modules.pulse_surveys.router import (
     router as pulse_surveys_router,
     admin_pulse_surveys_router,
 )
+from backend.app.modules.information_retrieval.router import (
+    router as information_retrieval_router,
+)
 
 
 
@@ -107,6 +110,7 @@ app.include_router(profiles_router)
 app.include_router(tasks_router)
 app.include_router(collaboration_router)
 app.include_router(pulse_surveys_router)
+app.include_router(information_retrieval_router)
 
 
 
