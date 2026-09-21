@@ -95,6 +95,11 @@ npm run build
 | `/auth/me` | `GET` | Authenticated (`employee`, `manager`, `admin`) | Retrieve current sanitized user profile |
 | `/admin/access-check` | `GET` | `admin` | Administrative route guard verification |
 | `/management/access-check` | `GET` | `manager`, `admin` | Management route guard verification |
+| `/pulse-surveys/responses` | `POST` | `employee` | Submit weekly pulse survey response (server-derived user, team, week) |
+| `/pulse-surveys/my-responses` | `GET` | `employee` | View authenticated employee's own pulse survey history |
+| `/pulse-surveys/team-summary` | `GET` | `manager` | View privacy-thresholded team aggregate metrics (min 3 responses) |
+| `/admin/pulse-surveys` | `GET` | `admin` | Audit pulse survey submission metadata (privacy-safe, read-only) |
+| `/admin/pulse-surveys/summary` | `GET` | `admin` | Organization-wide per-team pulse summaries with privacy thresholding |
 
 ### JSON Login Request Example
 ```json
@@ -123,5 +128,5 @@ Content-Type: application/json
 1. **In-Memory Session Storage:** JWT access tokens are stored strictly in-memory (React state) to prevent browser storage XSS exposure. Page reloads currently require signing in again.
 2. **Token Lifetime & Refresh:** Access tokens expire in 15 minutes. Refresh tokens and server-side token revocation blocklists are not yet implemented.
 3. **Dynamic Role Verification:** The backend resolves the token subject against the live database record on each request, ensuring role modifications or deactivations take effect immediately.
-4. **Role Scope:** Role guards enforce global levels (`employee`, `manager`, `admin`). Fine-grained record/team ownership constraints are not yet active.
+4. **Role Scope & Privacy Thresholding:** Weekly pulse surveys provide employee self-submission, manager team aggregates with a strict minimum response threshold of 3 for anonymity, and admin privacy-safe audit metadata. No individual well-being scores, mood/stress classifications, or diagnostic labels are computed or exposed.
 5. **Specialist AI Agents:** The four specialist agents (*Productivity, Collaboration, Wellbeing, Task Assignment*) are designated for development on their respective feature branches; no synthetic results are simulated.

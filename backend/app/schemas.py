@@ -483,3 +483,88 @@ class CollaborationMessageListResponse(BaseModel):
     page: int
     limit: int
     total_pages: int
+
+
+class CreatePulseSurveyResponseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workload_manageability: Annotated[int, Field(strict=True, ge=1, le=5)]
+    work_life_balance: Annotated[int, Field(strict=True, ge=1, le=5)]
+    team_support: Annotated[int, Field(strict=True, ge=1, le=5)]
+    engagement: Annotated[int, Field(strict=True, ge=1, le=5)]
+    optional_comment: str | None = None
+
+    @field_validator("optional_comment", mode="before")
+    @classmethod
+    def validate_and_normalize_comment(cls, v):
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            raise ValueError("optional_comment must be a string")
+        stripped = v.strip()
+        if not stripped:
+            return None
+        if len(stripped) > 1000:
+            raise ValueError("optional_comment cannot exceed 1000 characters")
+        return stripped
+
+
+class PulseSurveyResponse(BaseModel):
+    id: str
+    user_id: str
+    team_id: str
+    team_name: str | None = None
+    week_start: str
+    workload_manageability: int
+    work_life_balance: int
+    team_support: int
+    engagement: int
+    optional_comment: str | None = None
+    submitted_at: str
+
+
+class PulseSurveyResponseList(BaseModel):
+    items: list[PulseSurveyResponse] = Field(default_factory=list)
+    total: int
+    page: int
+    limit: int
+    total_pages: int
+
+
+class PulseMetricAverages(BaseModel):
+    workload_manageability: float
+    work_life_balance: float
+    team_support: float
+    engagement: float
+
+
+class PulseTeamSummaryResponse(BaseModel):
+    available: bool
+    team_id: str
+    team_name: str | None = None
+    week_start: str
+    response_count: int
+    minimum_required: int = 3
+    averages: PulseMetricAverages | None = None
+    message: str | None = None
+
+
+class PulseAuditRecordResponse(BaseModel):
+    id: str
+    team_id: str
+    team_name: str | None = None
+    week_start: str
+    submitted_at: str
+
+
+class PulseAuditListResponse(BaseModel):
+    items: list[PulseAuditRecordResponse] = Field(default_factory=list)
+    total: int
+    page: int
+    limit: int
+    total_pages: int
+
+
+class AdminPulseSummaryResponse(BaseModel):
+    week_start: str
+    items: list[PulseTeamSummaryResponse] = Field(default_factory=list)
