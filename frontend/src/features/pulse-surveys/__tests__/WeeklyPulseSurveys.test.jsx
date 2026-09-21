@@ -13,6 +13,7 @@ describe("Weekly Pulse Surveys Feature Suite", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   describe("Employee Pulse Survey Workflow", () => {
@@ -316,6 +317,530 @@ describe("Weekly Pulse Surveys Feature Suite", () => {
 
       expect(await screen.findByText(/Personal confidential note for myself/i)).toBeInTheDocument();
       expect(screen.getByText("Alpha Workforce")).toBeInTheDocument();
+    });
+  });
+
+  describe("Employee Current-Week Edit Workflow", () => {
+    const employeeUser = {
+      id: "64b1f28b4f1c2b3a4e5d6f11",
+      name: "Alice Employee",
+      email: "alice@example.com",
+      role: "employee",
+      team_id: "64b1f28b4f1c2b3a4e5d6f99",
+    };
+
+    const assignedTeam = {
+      has_team: true,
+      team_id: "64b1f28b4f1c2b3a4e5d6f99",
+      team_name: "Alpha Workforce",
+      manager: { name: "Mark Manager", email: "manager@example.com" },
+      members: [],
+    };
+
+    const now = new Date();
+    const utcDay = now.getUTCDay();
+    const diff = (utcDay === 0 ? -6 : 1) - utcDay;
+    const currentMonday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + diff, 0, 0, 0, 0));
+    const currentWeekIso = currentMonday.toISOString();
+    const pastWeekIso = new Date(currentMonday.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+    it("renders Edit action for current-week response, but NOT for past-week response", async () => {
+      global.fetch = vi.fn().mockImplementation(async (url) => {
+        if (String(url).includes("/pulse-surveys/my-responses")) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ "content-type": "application/json" }),
+            json: async () => ({
+              items: [
+                {
+                  id: "resp-current-1",
+                  user_id: employeeUser.id,
+                  team_id: assignedTeam.team_id,
+                  team_name: "Alpha Workforce",
+                  week_start: currentWeekIso,
+                  workload_manageability: 4,
+                  work_life_balance: 4,
+                  team_support: 4,
+                  engagement: 4,
+                  optional_comment: "Current week note",
+                  submitted_at: "2026-09-21T10:00:00Z",
+                  revision: 1,
+                },
+                {
+                  id: "resp-past-1",
+                  user_id: employeeUser.id,
+                  team_id: assignedTeam.team_id,
+                  team_name: "Alpha Workforce",
+                  week_start: pastWeekIso,
+                  workload_manageability: 3,
+                  work_life_balance: 3,
+                  team_support: 3,
+                  engagement: 3,
+                  optional_comment: "Past week note",
+                  submitted_at: "2026-09-14T10:00:00Z",
+                  revision: 1,
+                },
+              ],
+              total: 2,
+              page: 1,
+              limit: 10,
+              total_pages: 1,
+            }),
+          };
+        }
+        return { ok: false, status: 404, headers: new Headers(), json: async () => ({}) };
+      });
+
+      render(
+        <EmployeePulseSurvey
+          user={employeeUser}
+          token={fakeToken}
+          assignedTeam={assignedTeam}
+        />
+      );
+
+      // Current week response should have "Current Week" badge and "Edit Response" button
+      expect(await screen.findByText("Current Week")).toBeInTheDocument();
+      const editButtons = screen.getAllByRole("button", { name: /Edit Response/i });
+      expect(editButtons).toHaveLength(1);
+      expect(editButtons[0]).toHaveAttribute("id", "edit-pulse-btn-resp-current-1");
+
+      // Past week response has no edit button
+      expect(document.getElementById("edit-pulse-btn-resp-past-1")).toBeNull();
+    });
+
+    it("opens edit modal prefilled with current values and cancels cleanly", async () => {
+      const user = userEvent.setup();
+      let fetchCalls = 0;
+
+      global.fetch = vi.fn().mockImplementation(async (url) => {
+        fetchCalls++;
+        if (String(url).includes("/pulse-surveys/my-responses")) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ "content-type": "application/json" }),
+            json: async () => ({
+              items: [
+                {
+                  id: "resp-current-1",
+                  user_id: employeeUser.id,
+                  team_id: assignedTeam.team_id,
+                  team_name: "Alpha Workforce",
+                  week_start: currentWeekIso,
+                  workload_manageability: 4,
+                  work_life_balance: 5,
+                  team_support: 3,
+                  engagement: 4,
+                  optional_comment: "Original reflections note",
+                  submitted_at: "2026-09-21T10:00:00Z",
+                  revision: 1,
+                },
+              ],
+              total: 1,
+              page: 1,
+              limit: 10,
+              total_pages: 1,
+            }),
+          };
+        }
+        return { ok: false, status: 404, headers: new Headers(), json: async () => ({}) };
+      });
+
+      render(
+        <EmployeePulseSurvey
+          user={employeeUser}
+          token={fakeToken}
+          assignedTeam={assignedTeam}
+        />
+      );
+
+      const editBtn = await screen.findByRole("button", { name: /Edit Response/i });
+      await user.click(editBtn);
+
+      // Verify modal opened and prefilled
+      expect(screen.getByRole("heading", { name: /Edit Weekly Pulse Check-In/i })).toBeInTheDocument();
+      expect(
+        screen.getByText(/You can edit your response until the current UTC week ends. Previous weeks are read-only./i)
+      ).toBeInTheDocument();
+
+      const commentInput = screen.getByDisplayValue("Original reflections note");
+      expect(commentInput).toBeInTheDocument();
+
+      // Click cancel
+      const cancelBtn = screen.getByRole("button", { name: /Cancel/i });
+      await user.click(cancelBtn);
+
+      // Modal closed, no PATCH call made
+      expect(screen.queryByRole("heading", { name: /Edit Weekly Pulse Check-In/i })).not.toBeInTheDocument();
+      expect(fetchCalls).toBe(1); // Only initial load
+    });
+
+    it("sends exact PATCH request and updates response with Edited badge and timestamp", async () => {
+      const user = userEvent.setup();
+      let patchUrl = null;
+      let patchMethod = null;
+      let patchHeaders = null;
+      let patchBody = null;
+
+      global.fetch = vi.fn().mockImplementation(async (url, options = {}) => {
+        const urlStr = String(url);
+        if (urlStr.includes("/pulse-surveys/responses/resp-current-1") && options.method === "PATCH") {
+          patchUrl = urlStr;
+          patchMethod = options.method;
+          patchHeaders = options.headers;
+          patchBody = JSON.parse(options.body);
+
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ "content-type": "application/json" }),
+            json: async () => ({
+              id: "resp-current-1",
+              user_id: employeeUser.id,
+              team_id: assignedTeam.team_id,
+              team_name: "Alpha Workforce",
+              week_start: currentWeekIso,
+              workload_manageability: 5,
+              work_life_balance: 5,
+              team_support: 3,
+              engagement: 4,
+              optional_comment: "Updated reflections note after midweek review.",
+              submitted_at: "2026-09-21T10:00:00Z",
+              updated_at: "2026-09-22T14:30:00Z",
+              is_edited: true,
+              revision: 2,
+            }),
+          };
+        }
+
+        if (urlStr.includes("/pulse-surveys/my-responses")) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ "content-type": "application/json" }),
+            json: async () => ({
+              items: [
+                {
+                  id: "resp-current-1",
+                  user_id: employeeUser.id,
+                  team_id: assignedTeam.team_id,
+                  team_name: "Alpha Workforce",
+                  week_start: currentWeekIso,
+                  workload_manageability: patchBody ? patchBody.workload_manageability : 4,
+                  work_life_balance: 5,
+                  team_support: 3,
+                  engagement: 4,
+                  optional_comment: patchBody ? patchBody.optional_comment : "Original note",
+                  submitted_at: "2026-09-21T10:00:00Z",
+                  updated_at: patchBody ? "2026-09-22T14:30:00Z" : null,
+                  is_edited: Boolean(patchBody),
+                  revision: patchBody ? 2 : 1,
+                },
+              ],
+              total: 1,
+              page: 1,
+              limit: 10,
+              total_pages: 1,
+            }),
+          };
+        }
+        return { ok: false, status: 404, headers: new Headers(), json: async () => ({}) };
+      });
+
+      render(
+        <EmployeePulseSurvey
+          user={employeeUser}
+          token={fakeToken}
+          assignedTeam={assignedTeam}
+        />
+      );
+
+      const editBtn = await screen.findByRole("button", { name: /Edit Response/i });
+      await user.click(editBtn);
+
+      // In modal: change workload rating to 5 using exact button ID
+      const workloadOption5 = document.getElementById("edit-pulse-workload-option-5");
+      expect(workloadOption5).toBeInTheDocument();
+      await user.click(workloadOption5);
+
+      // Change comment
+      const commentInput = screen.getByDisplayValue("Original note");
+      await user.clear(commentInput);
+      await user.type(commentInput, "Updated reflections note after midweek review.");
+
+      // Click save
+      const saveBtn = screen.getByRole("button", { name: /Save Changes/i });
+      await user.click(saveBtn);
+
+      // Verify exact PATCH endpoint & payload
+      await waitFor(() => {
+        expect(patchUrl).toBe("/api/pulse-surveys/responses/resp-current-1");
+      });
+      expect(patchMethod).toBe("PATCH");
+      expect(patchHeaders["Authorization"]).toBe(`Bearer ${fakeToken}`);
+      expect(patchBody).toEqual({
+        workload_manageability: 5,
+        work_life_balance: 5,
+        team_support: 3,
+        engagement: 4,
+        optional_comment: "Updated reflections note after midweek review.",
+        expected_revision: 1,
+      });
+
+      // Verify success message and Edited badge
+      expect(await screen.findByText(/Your weekly pulse response has been updated successfully/i)).toBeInTheDocument();
+      expect(screen.getByText("Edited")).toBeInTheDocument();
+      expect(screen.getByText(/Edited:/i)).toBeInTheDocument();
+      expect(screen.getByText(/Submitted:/i)).toBeInTheDocument();
+    });
+
+    it("handles HTTP 409 conflict when another edit has occurred", async () => {
+      const user = userEvent.setup();
+
+      global.fetch = vi.fn().mockImplementation(async (url, options = {}) => {
+        const urlStr = String(url);
+        if (urlStr.includes("/pulse-surveys/responses/resp-current-1") && options.method === "PATCH") {
+          return {
+            ok: false,
+            status: 409,
+            headers: new Headers({ "content-type": "application/json" }),
+            json: async () => ({
+              detail: "Conflict: This pulse survey response was modified concurrently. Please refresh.",
+            }),
+          };
+        }
+
+        if (urlStr.includes("/pulse-surveys/my-responses")) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ "content-type": "application/json" }),
+            json: async () => ({
+              items: [
+                {
+                  id: "resp-current-1",
+                  user_id: employeeUser.id,
+                  team_id: assignedTeam.team_id,
+                  team_name: "Alpha Workforce",
+                  week_start: currentWeekIso,
+                  workload_manageability: 4,
+                  work_life_balance: 4,
+                  team_support: 4,
+                  engagement: 4,
+                  optional_comment: "Original note",
+                  submitted_at: "2026-09-21T10:00:00Z",
+                  revision: 1,
+                },
+              ],
+              total: 1,
+              page: 1,
+              limit: 10,
+              total_pages: 1,
+            }),
+          };
+        }
+        return { ok: false, status: 404, headers: new Headers(), json: async () => ({}) };
+      });
+
+      render(
+        <EmployeePulseSurvey
+          user={employeeUser}
+          token={fakeToken}
+          assignedTeam={assignedTeam}
+        />
+      );
+
+      const editBtn = await screen.findByRole("button", { name: /Edit Response/i });
+      await user.click(editBtn);
+
+      const saveBtn = screen.getByRole("button", { name: /Save Changes/i });
+      await user.click(saveBtn);
+
+      expect(
+        await screen.findByText(/Conflict: This pulse survey response was modified concurrently/i)
+      ).toBeInTheDocument();
+    });
+
+    it("handles closed-week HTTP 400 error cleanly", async () => {
+      const user = userEvent.setup();
+
+      global.fetch = vi.fn().mockImplementation(async (url, options = {}) => {
+        const urlStr = String(url);
+        if (urlStr.includes("/pulse-surveys/responses/resp-current-1") && options.method === "PATCH") {
+          return {
+            ok: false,
+            status: 400,
+            headers: new Headers({ "content-type": "application/json" }),
+            json: async () => ({
+              detail: "Previous-week responses are read-only and cannot be modified.",
+            }),
+          };
+        }
+
+        if (urlStr.includes("/pulse-surveys/my-responses")) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ "content-type": "application/json" }),
+            json: async () => ({
+              items: [
+                {
+                  id: "resp-current-1",
+                  user_id: employeeUser.id,
+                  team_id: assignedTeam.team_id,
+                  team_name: "Alpha Workforce",
+                  week_start: currentWeekIso,
+                  workload_manageability: 4,
+                  work_life_balance: 4,
+                  team_support: 4,
+                  engagement: 4,
+                  optional_comment: "Original note",
+                  submitted_at: "2026-09-21T10:00:00Z",
+                  revision: 1,
+                },
+              ],
+              total: 1,
+              page: 1,
+              limit: 10,
+              total_pages: 1,
+            }),
+          };
+        }
+        return { ok: false, status: 404, headers: new Headers(), json: async () => ({}) };
+      });
+
+      render(
+        <EmployeePulseSurvey
+          user={employeeUser}
+          token={fakeToken}
+          assignedTeam={assignedTeam}
+        />
+      );
+
+      const editBtn = await screen.findByRole("button", { name: /Edit Response/i });
+      await user.click(editBtn);
+
+      const saveBtn = screen.getByRole("button", { name: /Save Changes/i });
+      await user.click(saveBtn);
+
+      expect(
+        await screen.findByText(/The current UTC week has ended. Previous-week responses are read-only./i)
+      ).toBeInTheDocument();
+    });
+
+    it("correctly renders 'Week of Sep 21, 2026', 'Current Week' badge, and 'Edit Response' button for naive ISO string under fixed clock", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-09-21T13:04:00Z"));
+
+      try {
+        global.fetch = vi.fn().mockImplementation(async (url) => {
+          if (String(url).includes("/pulse-surveys/my-responses")) {
+            return {
+              ok: true,
+              status: 200,
+              headers: new Headers({ "content-type": "application/json" }),
+              json: async () => ({
+                items: [
+                  {
+                    id: "resp-naive-1",
+                    user_id: employeeUser.id,
+                    team_id: assignedTeam.team_id,
+                    team_name: "Alpha Workforce",
+                    week_start: "2026-09-21T00:00:00", // naive string as previously returned by backend
+                    workload_manageability: 4,
+                    work_life_balance: 4,
+                    team_support: 4,
+                    engagement: 4,
+                    optional_comment: "Weekly reflection",
+                    submitted_at: "2026-09-21T13:04:00",
+                    revision: 1,
+                  },
+                ],
+                total: 1,
+                page: 1,
+                limit: 10,
+                total_pages: 1,
+              }),
+            };
+          }
+          return { ok: false, status: 404, headers: new Headers(), json: async () => ({}) };
+        });
+
+        render(
+          <EmployeePulseSurvey
+            user={employeeUser}
+            token={fakeToken}
+            assignedTeam={assignedTeam}
+          />
+        );
+
+        // Verify canonical UTC week label format
+        expect(await screen.findByText("Week of Sep 21, 2026")).toBeInTheDocument();
+        expect(screen.queryByText("Week of Sep 20, 2026")).not.toBeInTheDocument();
+
+        // Verify Current Week badge and Edit button appear
+        expect(screen.getByText("Current Week")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /Edit Response/i })).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("preserves Current Week and Edit Response up to Sunday 23:59 UTC before rollover", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      // Sunday Sep 27, 2026 23:59:50 UTC (end of the UTC week)
+      vi.setSystemTime(new Date("2026-09-27T23:59:50Z"));
+
+      try {
+        global.fetch = vi.fn().mockImplementation(async (url) => {
+          if (String(url).includes("/pulse-surveys/my-responses")) {
+            return {
+              ok: true,
+              status: 200,
+              headers: new Headers({ "content-type": "application/json" }),
+              json: async () => ({
+                items: [
+                  {
+                    id: "resp-sun-1",
+                    user_id: employeeUser.id,
+                    team_id: assignedTeam.team_id,
+                    team_name: "Alpha Workforce",
+                    week_start: "2026-09-21T00:00:00+00:00",
+                    workload_manageability: 4,
+                    work_life_balance: 4,
+                    team_support: 4,
+                    engagement: 4,
+                    optional_comment: "Weekly reflection",
+                    submitted_at: "2026-09-21T13:04:00+00:00",
+                    revision: 1,
+                  },
+                ],
+                total: 1,
+                page: 1,
+                limit: 10,
+                total_pages: 1,
+              }),
+            };
+          }
+          return { ok: false, status: 404, headers: new Headers(), json: async () => ({}) };
+        });
+
+        render(
+          <EmployeePulseSurvey
+            user={employeeUser}
+            token={fakeToken}
+            assignedTeam={assignedTeam}
+          />
+        );
+
+        expect(await screen.findByText("Week of Sep 21, 2026")).toBeInTheDocument();
+        expect(screen.getByText("Current Week")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /Edit Response/i })).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

@@ -13,6 +13,10 @@ def _matches_filter(doc: dict, filter_query: dict | None) -> bool:
     if not filter_query:
         return True
     for k, v in filter_query.items():
+        if k == "$or":
+            if not any(_matches_filter(doc, sub_q) for sub_q in v):
+                return False
+            continue
         doc_val = doc.get(k)
         if isinstance(v, dict):
             if "$in" in v:
@@ -20,6 +24,10 @@ def _matches_filter(doc: dict, filter_query: dict | None) -> bool:
                     return False
             elif "$ne" in v:
                 if doc_val == v["$ne"]:
+                    return False
+            elif "$exists" in v:
+                exists = k in doc
+                if exists != v["$exists"]:
                     return False
         else:
             if doc_val != v:
@@ -142,6 +150,20 @@ class FakeAsyncCollection:
         if doc and "$set" in update_query:
             for k, v in update_query["$set"].items():
                 doc[k] = v
+
+    async def find_one_and_update(self, filter_query: dict, update_query: dict, return_document=True):
+        doc = await self.find_one(filter_query)
+        if not doc:
+            return None
+        if "$set" in update_query:
+            for k, v in update_query["$set"].items():
+                doc[k] = v
+        if "$push" in update_query:
+            for k, v in update_query["$push"].items():
+                if k not in doc or not isinstance(doc[k], list):
+                    doc[k] = []
+                doc[k].append(v)
+        return dict(doc)
 
     async def delete_one(self, filter_query: dict):
         for idx, doc in enumerate(self.docs):

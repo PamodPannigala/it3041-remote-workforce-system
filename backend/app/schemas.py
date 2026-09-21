@@ -509,6 +509,44 @@ class CreatePulseSurveyResponseRequest(BaseModel):
         return stripped
 
 
+class UpdatePulseSurveyResponseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workload_manageability: Annotated[int, Field(strict=True, ge=1, le=5)] | None = None
+    work_life_balance: Annotated[int, Field(strict=True, ge=1, le=5)] | None = None
+    team_support: Annotated[int, Field(strict=True, ge=1, le=5)] | None = None
+    engagement: Annotated[int, Field(strict=True, ge=1, le=5)] | None = None
+    optional_comment: str | None = None
+    expected_revision: Annotated[int, Field(strict=True, ge=1)]
+
+    @field_validator(
+        "workload_manageability",
+        "work_life_balance",
+        "team_support",
+        "engagement",
+        mode="before",
+    )
+    @classmethod
+    def validate_rating_not_none(cls, v, info):
+        if v is None:
+            raise ValueError(f"{info.field_name} cannot be null")
+        return v
+
+    @field_validator("optional_comment", mode="before")
+    @classmethod
+    def validate_and_normalize_comment(cls, v):
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            raise ValueError("optional_comment must be a string")
+        stripped = v.strip()
+        if not stripped:
+            return None
+        if len(stripped) > 1000:
+            raise ValueError("optional_comment cannot exceed 1000 characters")
+        return stripped
+
+
 class PulseSurveyResponse(BaseModel):
     id: str
     user_id: str
@@ -521,6 +559,9 @@ class PulseSurveyResponse(BaseModel):
     engagement: int
     optional_comment: str | None = None
     submitted_at: str
+    updated_at: str | None = None
+    is_edited: bool = False
+    revision: int = 1
 
 
 class PulseSurveyResponseList(BaseModel):

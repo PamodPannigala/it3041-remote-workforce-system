@@ -7,10 +7,26 @@ import EmptyState from "../../../components/ui/EmptyState";
 import { SkeletonCard } from "../../../components/ui/Skeleton";
 import { getTeamPulseSummary } from "../pulseSurveysApi";
 
+function parseUtcDate(dateStr) {
+  if (!dateStr) return null;
+  try {
+    let s = String(dateStr).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      s = `${s}T00:00:00Z`;
+    } else if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(s)) {
+      s = s.replace(" ", "T") + "Z";
+    }
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? new Date(dateStr) : d;
+  } catch {
+    return new Date(dateStr);
+  }
+}
+
 function formatWeekDisplay(dateStr) {
   if (!dateStr) return "Current Week";
   try {
-    const d = new Date(dateStr);
+    const d = parseUtcDate(dateStr);
     return `Week of ${d.toLocaleDateString("en-US", {
       month: "short",
       day: "numeric",

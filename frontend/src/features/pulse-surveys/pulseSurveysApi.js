@@ -109,6 +109,57 @@ export async function getMyPulseSurveyResponses(token, { page = 1, limit = 20 } 
   return await handleResponse(response);
 }
 
+/**
+ * Update an employee's own current-UTC-week pulse survey response.
+ * @param {string} token - JWT Access Token
+ * @param {string} responseId - Response ID to update
+ * @param {object} payload - { workload_manageability?, work_life_balance?, team_support?, engagement?, optional_comment?, expected_revision? }
+ */
+export async function updatePulseSurveyResponse(token, responseId, {
+  workload_manageability,
+  work_life_balance,
+  team_support,
+  engagement,
+  optional_comment,
+  expected_revision,
+} = {}) {
+  const body = {};
+  if (workload_manageability !== undefined && workload_manageability !== null) {
+    body.workload_manageability = Number(workload_manageability);
+  }
+  if (work_life_balance !== undefined && work_life_balance !== null) {
+    body.work_life_balance = Number(work_life_balance);
+  }
+  if (team_support !== undefined && team_support !== null) {
+    body.team_support = Number(team_support);
+  }
+  if (engagement !== undefined && engagement !== null) {
+    body.engagement = Number(engagement);
+  }
+  if (optional_comment !== undefined) {
+    if (optional_comment === null) {
+      body.optional_comment = null;
+    } else {
+      const trimmed = String(optional_comment).trim();
+      body.optional_comment = trimmed || null;
+    }
+  }
+  if (expected_revision !== undefined && expected_revision !== null) {
+    body.expected_revision = Number(expected_revision);
+  }
+
+  const response = await fetch(`/api/pulse-surveys/responses/${responseId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  return await handleResponse(response);
+}
+
 /* ================= Manager Pulse Insights Operations ================= */
 
 /**

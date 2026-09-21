@@ -5,11 +5,46 @@ import Badge from "../../../components/ui/Badge";
 import EmptyState from "../../../components/ui/EmptyState";
 import { SkeletonCard } from "../../../components/ui/Skeleton";
 import { getMyPulseSurveyResponses } from "../pulseSurveysApi";
+import EditPulseModal from "./EditPulseModal";
+
+function getUtcWeekStart(date = new Date()) {
+  const d = new Date(date);
+  const utcDay = d.getUTCDay(); // 0 is Sun, 1 is Mon, ..., 6 is Sat
+  const diff = (utcDay === 0 ? -6 : 1) - utcDay;
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + diff, 0, 0, 0, 0));
+}
+
+function parseUtcDate(dateStr) {
+  if (!dateStr) return null;
+  try {
+    let s = String(dateStr).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      s = `${s}T00:00:00Z`;
+    } else if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(s)) {
+      s = s.replace(" ", "T") + "Z";
+    }
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? new Date(dateStr) : d;
+  } catch {
+    return new Date(dateStr);
+  }
+}
+
+function isCurrentUtcWeek(weekStartStr) {
+  if (!weekStartStr) return false;
+  try {
+    const itemDate = parseUtcDate(weekStartStr);
+    const currentMonday = getUtcWeekStart();
+    return itemDate.toISOString().slice(0, 10) === currentMonday.toISOString().slice(0, 10);
+  } catch {
+    return false;
+  }
+}
 
 function formatWeekDate(dateStr) {
   if (!dateStr) return "N/A";
   try {
-    const d = new Date(dateStr);
+    const d = parseUtcDate(dateStr);
     return d.toLocaleDateString("en-US", {
       month: "short",
       day: "numeric",
@@ -24,7 +59,7 @@ function formatWeekDate(dateStr) {
 function formatTimestamp(dateStr) {
   if (!dateStr) return "N/A";
   try {
-    const d = new Date(dateStr);
+    const d = parseUtcDate(dateStr);
     return d.toLocaleString("en-US", {
       month: "short",
       day: "numeric",
@@ -47,6 +82,8 @@ export default function PulseResponseHistory({ token, onSessionExpired, refreshT
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
+  const [editingItem, setEditingItem] = useState(null);
 
   const loadHistory = useCallback(
     async (page = 1) => {
@@ -80,6 +117,14 @@ export default function PulseResponseHistory({ token, onSessionExpired, refreshT
     loadHistory(1);
   }, [loadHistory, refreshTrigger]);
 
+  const handleResponseUpdated = (updatedResponse) => {
+    setHistory((prev) =>
+      prev.map((item) => (item.id === updatedResponse.id ? { ...item, ...updatedResponse } : item))
+    );
+    setSuccessMessage("Your weekly pulse response has been updated successfully.");
+    loadHistory(pagination.page);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
@@ -88,7 +133,7 @@ export default function PulseResponseHistory({ token, onSessionExpired, refreshT
             Your Pulse Response History ({pagination.total})
           </h4>
           <p className="text-xs text-slate-500">
-            Confidential record of your past weekly submissions.
+            Confidential record of your past weekly submissions. You can edit your response until the current UTC week ends.
           </p>
         </div>
         <Button
@@ -116,6 +161,12 @@ export default function PulseResponseHistory({ token, onSessionExpired, refreshT
         </Button>
       </div>
 
+      {successMessage && (
+        <Alert variant="success" onDismiss={() => setSuccessMessage("")}>
+          {successMessage}
+        </Alert>
+      )}
+
       {error && (
         <Alert variant="error" onDismiss={() => setError("")}>
           {error}
@@ -134,80 +185,117 @@ export default function PulseResponseHistory({ token, onSessionExpired, refreshT
         />
       ) : (
         <div className="space-y-3">
-          {history.map((item) => (
-            <div
-              key={item.id}
-              className="p-4 rounded-xl bg-white border border-slate-200/80 shadow-xs hover:border-slate-300 transition-colors space-y-3"
-            >
-              {/* Card Header: Week & Submission Time */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Badge variant="employee" size="sm">
-                    Week of {formatWeekDate(item.week_start)}
-                  </Badge>
-                  {item.team_name && (
-                    <span className="text-xs font-semibold text-slate-700">
-                      Team: {item.team_name}
+          {history.map((item) => {
+            const isCurrentWeek = isCurrentUtcWeek(item.week_start);
+            const isEdited = Boolean(item.is_edited || item.updated_at);
+
+            return (
+              <div
+                key={item.id}
+                className="p-4 rounded-xl bg-white border border-slate-200/80 shadow-xs hover:border-slate-300 transition-colors space-y-3"
+              >
+                {/* Card Header: Week, Badges, Timestamps & Actions */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Badge variant="employee" size="sm">
+                      Week of {formatWeekDate(item.week_start)}
+                    </Badge>
+                    {isCurrentWeek && (
+                      <Badge variant="info" size="sm">
+                        Current Week
+                      </Badge>
+                    )}
+                    {isEdited && (
+                      <Badge variant="warning" size="sm">
+                        Edited
+                      </Badge>
+                    )}
+                    {item.team_name && (
+                      <span className="text-xs font-semibold text-slate-700">
+                        Team: {item.team_name}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <div className="flex flex-col sm:items-end text-[11px] text-slate-400">
+                      <span>Submitted: {formatTimestamp(item.submitted_at)}</span>
+                      {item.updated_at && (
+                        <span className="text-amber-600 font-medium">
+                          Edited: {formatTimestamp(item.updated_at)}
+                        </span>
+                      )}
+                    </div>
+                    {isCurrentWeek && (
+                      <Button
+                        id={`edit-pulse-btn-${item.id}`}
+                        variant="outline"
+                        size="xs"
+                        onClick={() => setEditingItem(item)}
+                        className="text-xs font-semibold text-blue-700 border-blue-200 hover:bg-blue-50"
+                      >
+                        Edit Response
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {/* 4 Metrics Badges */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200/60">
+                    <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                      Workload
                     </span>
-                  )}
+                    <span className="text-sm font-extrabold text-slate-800">
+                      {item.workload_manageability}{" "}
+                      <span className="text-xs font-normal text-slate-400">/ 5</span>
+                    </span>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200/60">
+                    <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                      Work-Life
+                    </span>
+                    <span className="text-sm font-extrabold text-slate-800">
+                      {item.work_life_balance}{" "}
+                      <span className="text-xs font-normal text-slate-400">/ 5</span>
+                    </span>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200/60">
+                    <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                      Team Support
+                    </span>
+                    <span className="text-sm font-extrabold text-slate-800">
+                      {item.team_support}{" "}
+                      <span className="text-xs font-normal text-slate-400">/ 5</span>
+                    </span>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200/60">
+                    <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                      Engagement
+                    </span>
+                    <span className="text-sm font-extrabold text-slate-800">
+                      {item.engagement}{" "}
+                      <span className="text-xs font-normal text-slate-400">/ 5</span>
+                    </span>
+                  </div>
                 </div>
-                <span className="text-[11px] text-slate-400">
-                  Submitted: {formatTimestamp(item.submitted_at)}
-                </span>
+
+                {/* Optional Comment if provided */}
+                {item.optional_comment && (
+                  <div className="pt-2 text-xs text-slate-700 bg-slate-50/70 p-3 rounded-lg border border-slate-200/60">
+                    <span className="font-semibold text-slate-600 block mb-1">
+                      Your Confidential Note:
+                    </span>
+                    <p className="whitespace-pre-wrap leading-relaxed">
+                      {item.optional_comment}
+                    </p>
+                  </div>
+                )}
               </div>
-
-              {/* 4 Metrics Badges */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200/60">
-                  <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                    Workload
-                  </span>
-                  <span className="text-sm font-extrabold text-slate-800">
-                    {item.workload_manageability} <span className="text-xs font-normal text-slate-400">/ 5</span>
-                  </span>
-                </div>
-
-                <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200/60">
-                  <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                    Work-Life
-                  </span>
-                  <span className="text-sm font-extrabold text-slate-800">
-                    {item.work_life_balance} <span className="text-xs font-normal text-slate-400">/ 5</span>
-                  </span>
-                </div>
-
-                <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200/60">
-                  <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                    Team Support
-                  </span>
-                  <span className="text-sm font-extrabold text-slate-800">
-                    {item.team_support} <span className="text-xs font-normal text-slate-400">/ 5</span>
-                  </span>
-                </div>
-
-                <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200/60">
-                  <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                    Engagement
-                  </span>
-                  <span className="text-sm font-extrabold text-slate-800">
-                    {item.engagement} <span className="text-xs font-normal text-slate-400">/ 5</span>
-                  </span>
-                </div>
-              </div>
-
-              {/* Optional Comment if provided */}
-              {item.optional_comment && (
-                <div className="pt-2 text-xs text-slate-700 bg-slate-50/70 p-3 rounded-lg border border-slate-200/60">
-                  <span className="font-semibold text-slate-600 block mb-1">
-                    Your Confidential Note:
-                  </span>
-                  <p className="whitespace-pre-wrap leading-relaxed">
-                    {item.optional_comment}
-                  </p>
-                </div>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -237,6 +325,18 @@ export default function PulseResponseHistory({ token, onSessionExpired, refreshT
             </Button>
           </div>
         </div>
+      )}
+
+      {/* Edit Pulse Modal */}
+      {editingItem && (
+        <EditPulseModal
+          isOpen={Boolean(editingItem)}
+          onClose={() => setEditingItem(null)}
+          response={editingItem}
+          token={token}
+          onResponseUpdated={handleResponseUpdated}
+          onSessionExpired={onSessionExpired}
+        />
       )}
     </div>
   );
