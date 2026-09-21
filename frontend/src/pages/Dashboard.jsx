@@ -19,6 +19,8 @@ import ManagerTeamProfiles from "../features/profiles/components/ManagerTeamProf
 import EmployeeTasks from "../features/tasks/components/EmployeeTasks";
 import ManagerTaskBoard from "../features/tasks/components/ManagerTaskBoard";
 import AdminTaskAudit from "../features/tasks/components/AdminTaskAudit";
+import TeamMessages from "../features/collaboration/components/TeamMessages";
+import AdminMessageAudit from "../features/collaboration/components/AdminMessageAudit";
 
 import AppShell from "../layouts/AppShell";
 import PageHeader from "../layouts/PageHeader";
@@ -347,6 +349,8 @@ export default function Dashboard() {
       users: "User Directory",
       teams: "Team Management",
       "task-audit": "Task Audit",
+      "team-messages": "Team Messages",
+      "message-audit": "Message Audit",
     };
     return titles[activeTab] || "Overview";
   };
@@ -562,6 +566,16 @@ export default function Dashboard() {
         {/* My Tasks Section */}
         {activeTab === "my-tasks" && (
           <EmployeeTasks token={token} onSessionExpired={handleSessionExpired} />
+        )}
+
+        {/* Team Messages Section */}
+        {activeTab === "team-messages" && (
+          <TeamMessages
+            user={user}
+            token={token}
+            onSessionExpired={handleSessionExpired}
+            assignedTeam={employeeTeamSummary}
+          />
         )}
       </div>
     );
@@ -794,6 +808,16 @@ export default function Dashboard() {
             managedTeams={managedTeams}
             token={token}
             onSessionExpired={handleSessionExpired}
+          />
+        )}
+
+        {/* Team Messages Section */}
+        {activeTab === "team-messages" && (
+          <TeamMessages
+            user={user}
+            token={token}
+            onSessionExpired={handleSessionExpired}
+            managedTeams={managedTeams}
           />
         )}
       </div>
@@ -1221,6 +1245,15 @@ export default function Dashboard() {
         {/* Task Audit Section */}
         {activeTab === "task-audit" && (
           <AdminTaskAudit
+            adminTeams={adminTeams}
+            token={token}
+            onSessionExpired={handleSessionExpired}
+          />
+        )}
+
+        {/* Message Audit Section */}
+        {activeTab === "message-audit" && (
+          <AdminMessageAudit
             adminTeams={adminTeams}
             token={token}
             onSessionExpired={handleSessionExpired}

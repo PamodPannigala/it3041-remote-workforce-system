@@ -383,6 +383,186 @@ describe("Frontend Authentication, Session Persistence, and Dashboard Flows", ()
     expect(screen.queryByText(/my work profile/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/team work profiles/i)).not.toBeInTheDocument();
   });
+
+  it("admin successfully creates a new team with valid payload format ({ name, manager_id })", async () => {
+    sessionStorage.setItem("token", "admin-jwt-token");
+    const user = userEvent.setup();
+
+    let capturedPostUrl = null;
+    let capturedPostMethod = null;
+    let capturedPostBody = null;
+
+    global.fetch = vi.fn().mockImplementation(async (url, options) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/auth/me")) {
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({
+            id: "64b1f28b4f1c2b3a4e5d6f11",
+            name: "Super Administrator",
+            email: "admin@example.com",
+            role: "admin",
+          }),
+        };
+      }
+      if (urlStr.includes("/admin/users")) {
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({
+            items: [
+              {
+                id: "64b1f28b4f1c2b3a4e5d6f22",
+                name: "John Manager",
+                email: "john.mgr@example.com",
+                role: "manager",
+                is_active: true,
+              },
+            ],
+            total: 1,
+            page: 1,
+            limit: 10,
+            total_pages: 1,
+          }),
+        };
+      }
+      if (urlStr.includes("/admin/teams")) {
+        if (options?.method === "POST") {
+          capturedPostUrl = urlStr;
+          capturedPostMethod = options.method;
+          capturedPostBody = JSON.parse(options.body);
+          return {
+            ok: true,
+            status: 201,
+            headers: new Headers({ "content-type": "application/json" }),
+            json: async () => ({
+              id: "64b1f28b4f1c2b3a4e5d6f99",
+              name: capturedPostBody.name,
+              manager_id: capturedPostBody.manager_id,
+              manager_name: "John Manager",
+              manager_email: "john.mgr@example.com",
+              members: [],
+              created_at: "2026-09-21T10:00:00Z",
+            }),
+          };
+        }
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => [],
+        };
+      }
+      return { ok: false, status: 404, headers: new Headers(), json: async () => ({}) };
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: /create team/i })).toBeInTheDocument();
+
+    // Fill form
+    const nameInput = screen.getByLabelText(/team name/i);
+    await user.type(nameInput, "Beta");
+
+    const managerSelect = screen.getByLabelText(/team manager/i);
+    await user.selectOptions(managerSelect, "64b1f28b4f1c2b3a4e5d6f22");
+
+    // Click Create Team
+    const submitBtn = screen.getByRole("button", { name: /^create team$/i });
+    await user.click(submitBtn);
+
+    // Verify exactly one POST request was sent to /api/admin/teams
+    expect(capturedPostMethod).toBe("POST");
+    expect(capturedPostUrl).toContain("/api/admin/teams");
+
+    // Verify payload shape matches CreateTeamRequest schema exactly
+    expect(capturedPostBody).toEqual({
+      name: "Beta",
+      manager_id: "64b1f28b4f1c2b3a4e5d6f22",
+    });
+    expect(typeof capturedPostBody.name).toBe("string");
+    expect(typeof capturedPostBody.manager_id).toBe("string");
+
+    // Verify success banner and form reset
+    expect(await screen.findByText(/team created successfully/i)).toBeInTheDocument();
+    expect(nameInput).toHaveValue("");
+    expect(managerSelect).toHaveValue("");
+  });
+
+  it("admin team creation handles 422 error gracefully with readable alert", async () => {
+    sessionStorage.setItem("token", "admin-jwt-token");
+    const user = userEvent.setup();
+
+    global.fetch = vi.fn().mockImplementation(async (url, options) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/auth/me")) {
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({
+            id: "64b1f28b4f1c2b3a4e5d6f11",
+            name: "Super Administrator",
+            email: "admin@example.com",
+            role: "admin",
+          }),
+        };
+      }
+      if (urlStr.includes("/admin/users")) {
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({
+            items: [
+              {
+                id: "64b1f28b4f1c2b3a4e5d6f22",
+                name: "John Manager",
+                email: "john.mgr@example.com",
+                role: "manager",
+                is_active: true,
+              },
+            ],
+            total: 1,
+            page: 1,
+            limit: 10,
+            total_pages: 1,
+          }),
+        };
+      }
+      if (urlStr.includes("/admin/teams")) {
+        if (options?.method === "POST") {
+          return {
+            ok: false,
+            status: 422,
+            headers: new Headers({ "content-type": "application/json" }),
+            json: async () => ({
+              detail: [
+                { loc: ["body", "name"], msg: "Input should be a valid string" },
+                { loc: ["body", "manager_id"], msg: "Field required" },
+              ],
+            }),
+          };
+        }
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => [],
+        };
+      }
+      return { ok: false, status: 404, headers: new Headers(), json: async () => ({}) };
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: /create team/i })).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/team name/i), "Beta");
+    await user.selectOptions(screen.getByLabelText(/team manager/i), "64b1f28b4f1c2b3a4e5d6f22");
+    await user.click(screen.getByRole("button", { name: /^create team$/i }));
+
+    expect(
+      await screen.findByText(/name: Input should be a valid string, manager_id: Field required/i)
+    ).toBeInTheDocument();
+  });
 });
 
 describe("Employee Work Profiles Features", () => {
