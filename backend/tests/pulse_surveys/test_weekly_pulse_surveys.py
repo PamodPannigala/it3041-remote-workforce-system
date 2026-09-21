@@ -910,3 +910,532 @@ def test_required_indexes_configured_in_fake_db(fake_db):
     assert pulse_indexes[(("user_id", 1), ("week_start", -1))]["unique"] is True
     assert (("team_id", 1), ("week_start", -1)) in pulse_indexes
     assert pulse_indexes[(("team_id", 1), ("week_start", -1))]["unique"] is False
+
+
+# =============================================================================
+# 7. Employee Response Current-Week Edit Tests (PATCH /pulse-surveys/responses/{id})
+# =============================================================================
+
+
+def test_own_current_week_edit_succeeds(test_setup):
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr@example.com", role="manager")
+    team = create_team(fake_db, name="Alpha Team", manager_id=mgr["_id"])
+    emp = create_user(fake_db, email="emp@example.com", role="employee", team_id=team["_id"])
+    token = make_token(emp["_id"])
+
+    # Submit initial response
+    create_res = client.post(
+        "/pulse-surveys/responses",
+        json={"workload_manageability": 3, "work_life_balance": 3, "team_support": 3, "engagement": 3, "optional_comment": "Initial comment"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert create_res.status_code == 201
+    resp_id = create_res.json()["id"]
+
+    # Edit the response
+    patch_payload = {
+        "workload_manageability": 5,
+        "work_life_balance": 4,
+        "team_support": 5,
+        "engagement": 4,
+        "optional_comment": "Updated reflection note",
+        "expected_revision": 1,
+    }
+    patch_res = client.patch(
+        f"/pulse-surveys/responses/{resp_id}",
+        json=patch_payload,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert patch_res.status_code == 200
+    data = patch_res.json()
+
+    assert data["id"] == resp_id
+    assert data["workload_manageability"] == 5
+    assert data["work_life_balance"] == 4
+    assert data["team_support"] == 5
+    assert data["engagement"] == 4
+    assert data["optional_comment"] == "Updated reflection note"
+    assert data["is_edited"] is True
+    assert data["revision"] == 2
+    assert data["updated_at"] is not None
+    assert data["submitted_at"] == create_res.json()["submitted_at"]
+    assert data["week_start"] == create_res.json()["week_start"]
+
+    # Verify internal edit_history in fake_db
+    stored_doc = fake_db["weekly_pulse_responses"].docs[0]
+    assert stored_doc["revision"] == 2
+    assert stored_doc["is_edited"] is True
+    assert len(stored_doc["edit_history"]) == 1
+    hist = stored_doc["edit_history"][0]
+    assert hist["revision"] == 1
+    assert hist["workload_manageability"] == 3
+    assert hist["optional_comment"] == "Initial comment"
+    assert hist["edited_by"] == emp["_id"]
+
+
+def test_previous_week_edit_is_rejected(test_setup):
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr@example.com", role="manager")
+    team = create_team(fake_db, name="Alpha Team", manager_id=mgr["_id"])
+    emp = create_user(fake_db, email="emp@example.com", role="employee", team_id=team["_id"])
+    token = make_token(emp["_id"])
+
+    # Seed past-week response
+    past_ws = get_current_week_start() - timedelta(weeks=1)
+    fake_db["weekly_pulse_responses"].docs.append({
+        "_id": ObjectId(),
+        "user_id": emp["_id"],
+        "team_id": team["_id"],
+        "week_start": past_ws,
+        "workload_manageability": 3,
+        "work_life_balance": 3,
+        "team_support": 3,
+        "engagement": 3,
+        "optional_comment": "Old week",
+        "submitted_at": past_ws,
+        "revision": 1,
+    })
+    resp_id = str(fake_db["weekly_pulse_responses"].docs[0]["_id"])
+
+    patch_res = client.patch(
+        f"/pulse-surveys/responses/{resp_id}",
+        json={"workload_manageability": 5, "expected_revision": 1},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert patch_res.status_code == 400
+    assert "Previous-week responses are read-only" in patch_res.json()["detail"]
+
+
+def test_another_employee_response_cannot_be_edited(test_setup):
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr@example.com", role="manager")
+    team = create_team(fake_db, name="Alpha Team", manager_id=mgr["_id"])
+    emp1 = create_user(fake_db, email="emp1@example.com", role="employee", team_id=team["_id"])
+    emp2 = create_user(fake_db, email="emp2@example.com", role="employee", team_id=team["_id"])
+
+    token1 = make_token(emp1["_id"])
+    token2 = make_token(emp2["_id"])
+
+    # emp1 submits
+    create_res = client.post(
+        "/pulse-surveys/responses",
+        json={"workload_manageability": 3, "work_life_balance": 3, "team_support": 3, "engagement": 3},
+        headers={"Authorization": f"Bearer {token1}"},
+    )
+    resp_id = create_res.json()["id"]
+
+    # emp2 attempts to edit emp1's response
+    patch_res = client.patch(
+        f"/pulse-surveys/responses/{resp_id}",
+        json={"workload_manageability": 5, "expected_revision": 1},
+        headers={"Authorization": f"Bearer {token2}"},
+    )
+    assert patch_res.status_code == 403
+    assert "You can only edit your own pulse survey response" in patch_res.json()["detail"]
+
+
+def test_manager_and_admin_cannot_edit_pulse_survey(test_setup):
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr@example.com", role="manager")
+    admin = create_user(fake_db, email="admin@example.com", role="admin")
+    team = create_team(fake_db, name="Alpha Team", manager_id=mgr["_id"])
+    emp = create_user(fake_db, email="emp@example.com", role="employee", team_id=team["_id"])
+
+    emp_token = make_token(emp["_id"])
+    mgr_token = make_token(mgr["_id"])
+    admin_token = make_token(admin["_id"])
+
+    create_res = client.post(
+        "/pulse-surveys/responses",
+        json={"workload_manageability": 3, "work_life_balance": 3, "team_support": 3, "engagement": 3},
+        headers={"Authorization": f"Bearer {emp_token}"},
+    )
+    resp_id = create_res.json()["id"]
+
+    # Manager attempts edit
+    res_mgr = client.patch(
+        f"/pulse-surveys/responses/{resp_id}",
+        json={"workload_manageability": 5, "expected_revision": 1},
+        headers={"Authorization": f"Bearer {mgr_token}"},
+    )
+    assert res_mgr.status_code == 403
+
+    # Admin attempts edit
+    res_admin = client.patch(
+        f"/pulse-surveys/responses/{resp_id}",
+        json={"workload_manageability": 5, "expected_revision": 1},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert res_admin.status_code == 403
+
+
+def test_unauthenticated_edit_rejected(test_setup):
+    client, fake_db = test_setup
+    res = client.patch(
+        f"/pulse-surveys/responses/{ObjectId()}",
+        json={"workload_manageability": 4, "expected_revision": 1},
+    )
+    assert res.status_code == 401
+
+
+def test_invalid_ratings_and_forged_fields_rejected(test_setup):
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr@example.com", role="manager")
+    team = create_team(fake_db, name="Alpha Team", manager_id=mgr["_id"])
+    emp = create_user(fake_db, email="emp@example.com", role="employee", team_id=team["_id"])
+    token = make_token(emp["_id"])
+
+    create_res = client.post(
+        "/pulse-surveys/responses",
+        json={"workload_manageability": 3, "work_life_balance": 3, "team_support": 3, "engagement": 3},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    resp_id = create_res.json()["id"]
+
+    # 1. Rating out of bounds (< 1)
+    res1 = client.patch(f"/pulse-surveys/responses/{resp_id}", json={"workload_manageability": 0, "expected_revision": 1}, headers={"Authorization": f"Bearer {token}"})
+    assert res1.status_code == 422
+
+    # 2. Rating out of bounds (> 5)
+    res2 = client.patch(f"/pulse-surveys/responses/{resp_id}", json={"workload_manageability": 6, "expected_revision": 1}, headers={"Authorization": f"Bearer {token}"})
+    assert res2.status_code == 422
+
+    # 3. Explicit null rating
+    res3 = client.patch(f"/pulse-surveys/responses/{resp_id}", json={"workload_manageability": None, "expected_revision": 1}, headers={"Authorization": f"Bearer {token}"})
+    assert res3.status_code == 422
+
+    # 4. Forged field (user_id / team_id / week_start)
+    res4 = client.patch(f"/pulse-surveys/responses/{resp_id}", json={"user_id": str(ObjectId()), "expected_revision": 1}, headers={"Authorization": f"Bearer {token}"})
+    assert res4.status_code == 422
+
+    # 5. Empty update
+    res5 = client.patch(f"/pulse-surveys/responses/{resp_id}", json={}, headers={"Authorization": f"Bearer {token}"})
+    assert res5.status_code == 422
+
+
+def test_missing_expected_revision_rejected_with_422(test_setup):
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr@example.com", role="manager")
+    team = create_team(fake_db, name="Alpha Team", manager_id=mgr["_id"])
+    emp = create_user(fake_db, email="emp@example.com", role="employee", team_id=team["_id"])
+    token = make_token(emp["_id"])
+
+    create_res = client.post(
+        "/pulse-surveys/responses",
+        json={"workload_manageability": 3, "work_life_balance": 3, "team_support": 3, "engagement": 3},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    resp_id = create_res.json()["id"]
+
+    # Missing expected_revision field
+    res1 = client.patch(
+        f"/pulse-surveys/responses/{resp_id}",
+        json={"workload_manageability": 4},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res1.status_code == 422
+
+    # Invalid expected_revision (< 1)
+    res2 = client.patch(
+        f"/pulse-surveys/responses/{resp_id}",
+        json={"workload_manageability": 4, "expected_revision": 0},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res2.status_code == 422
+
+    # Invalid expected_revision (non-integer string)
+    res3 = client.patch(
+        f"/pulse-surveys/responses/{resp_id}",
+        json={"workload_manageability": 4, "expected_revision": "abc"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res3.status_code == 422
+
+
+def test_only_expected_revision_without_editable_fields_rejected_with_422(test_setup):
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr@example.com", role="manager")
+    team = create_team(fake_db, name="Alpha Team", manager_id=mgr["_id"])
+    emp = create_user(fake_db, email="emp@example.com", role="employee", team_id=team["_id"])
+    token = make_token(emp["_id"])
+
+    create_res = client.post(
+        "/pulse-surveys/responses",
+        json={"workload_manageability": 3, "work_life_balance": 3, "team_support": 3, "engagement": 3},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    resp_id = create_res.json()["id"]
+
+    # Only expected_revision provided, no ratings or comment
+    res = client.patch(
+        f"/pulse-surveys/responses/{resp_id}",
+        json={"expected_revision": 1},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 422
+    assert "At least one rating or optional_comment field must be provided" in res.json()["detail"]
+
+
+def test_omitted_vs_cleared_comment_behaves_correctly(test_setup):
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr@example.com", role="manager")
+    team = create_team(fake_db, name="Alpha Team", manager_id=mgr["_id"])
+    emp = create_user(fake_db, email="emp@example.com", role="employee", team_id=team["_id"])
+    token = make_token(emp["_id"])
+
+    create_res = client.post(
+        "/pulse-surveys/responses",
+        json={"workload_manageability": 3, "work_life_balance": 3, "team_support": 3, "engagement": 3, "optional_comment": "Keep this comment"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    resp_id = create_res.json()["id"]
+
+    # Edit without optional_comment -> comment must remain unchanged
+    res1 = client.patch(f"/pulse-surveys/responses/{resp_id}", json={"workload_manageability": 4, "expected_revision": 1}, headers={"Authorization": f"Bearer {token}"})
+    assert res1.status_code == 200
+    assert res1.json()["optional_comment"] == "Keep this comment"
+    assert res1.json()["revision"] == 2
+
+    # Edit with optional_comment: null -> comment must be cleared
+    res2 = client.patch(f"/pulse-surveys/responses/{resp_id}", json={"optional_comment": None, "expected_revision": 2}, headers={"Authorization": f"Bearer {token}"})
+    assert res2.status_code == 200
+    assert res2.json()["optional_comment"] is None
+    assert res2.json()["revision"] == 3
+
+
+def test_original_submission_metadata_unchanged_and_team_switch_preserved(test_setup):
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr@example.com", role="manager")
+    team1 = create_team(fake_db, name="Alpha Team", manager_id=mgr["_id"])
+    team2 = create_team(fake_db, name="Beta Team", manager_id=mgr["_id"])
+    emp = create_user(fake_db, email="emp@example.com", role="employee", team_id=team1["_id"])
+    token = make_token(emp["_id"])
+
+    create_res = client.post(
+        "/pulse-surveys/responses",
+        json={"workload_manageability": 3, "work_life_balance": 3, "team_support": 3, "engagement": 3},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    resp_id = create_res.json()["id"]
+    orig_submitted_at = create_res.json()["submitted_at"]
+
+    # Employee changes team assignment in DB
+    emp["team_id"] = team2["_id"]
+
+    # Edit the pulse response
+    patch_res = client.patch(
+        f"/pulse-surveys/responses/{resp_id}",
+        json={"workload_manageability": 5, "expected_revision": 1},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert patch_res.status_code == 200
+    data = patch_res.json()
+
+    # Original team_id must NOT be moved to team2
+    assert data["team_id"] == str(team1["_id"])
+    assert data["team_name"] == "Alpha Team"
+    assert data["submitted_at"] == orig_submitted_at
+
+
+def test_editing_keeps_response_count_unchanged_and_updates_aggregate_averages(test_setup):
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr@example.com", role="manager")
+    team = create_team(fake_db, name="Alpha Team", manager_id=mgr["_id"])
+    emp1 = create_user(fake_db, email="emp1@example.com", role="employee", team_id=team["_id"])
+    emp2 = create_user(fake_db, email="emp2@example.com", role="employee", team_id=team["_id"])
+    emp3 = create_user(fake_db, email="emp3@example.com", role="employee", team_id=team["_id"])
+
+    token1 = make_token(emp1["_id"])
+    token2 = make_token(emp2["_id"])
+    token3 = make_token(emp3["_id"])
+    mgr_token = make_token(mgr["_id"])
+
+    # 3 employees submit responses
+    res1 = client.post("/pulse-surveys/responses", json={"workload_manageability": 2, "work_life_balance": 2, "team_support": 2, "engagement": 2}, headers={"Authorization": f"Bearer {token1}"})
+    client.post("/pulse-surveys/responses", json={"workload_manageability": 3, "work_life_balance": 3, "team_support": 3, "engagement": 3}, headers={"Authorization": f"Bearer {token2}"})
+    client.post("/pulse-surveys/responses", json={"workload_manageability": 4, "work_life_balance": 4, "team_support": 4, "engagement": 4}, headers={"Authorization": f"Bearer {token3}"})
+
+    resp1_id = res1.json()["id"]
+
+    # Initial manager summary: averages 3.0, count 3
+    summary1 = client.get(f"/pulse-surveys/team-summary?team_id={team['_id']}", headers={"Authorization": f"Bearer {mgr_token}"}).json()
+    assert summary1["response_count"] == 3
+    assert summary1["averages"]["workload_manageability"] == 3.0
+
+    # emp1 updates their workload_manageability from 2 to 5
+    client.patch(f"/pulse-surveys/responses/{resp1_id}", json={"workload_manageability": 5, "expected_revision": 1}, headers={"Authorization": f"Bearer {token1}"})
+
+    # Updated manager summary: (5 + 3 + 4) / 3 = 4.0, count remains 3
+    summary2 = client.get(f"/pulse-surveys/team-summary?team_id={team['_id']}", headers={"Authorization": f"Bearer {mgr_token}"}).json()
+    assert summary2["response_count"] == 3
+    assert summary2["averages"]["workload_manageability"] == 4.0
+
+
+def test_concurrent_stale_edits_rejected(test_setup):
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr@example.com", role="manager")
+    team = create_team(fake_db, name="Alpha Team", manager_id=mgr["_id"])
+    emp = create_user(fake_db, email="emp@example.com", role="employee", team_id=team["_id"])
+    token = make_token(emp["_id"])
+
+    create_res = client.post(
+        "/pulse-surveys/responses",
+        json={"workload_manageability": 3, "work_life_balance": 3, "team_support": 3, "engagement": 3},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    resp_id = create_res.json()["id"]
+
+    # First update succeeds (revision moves from 1 to 2)
+    res1 = client.patch(
+        f"/pulse-surveys/responses/{resp_id}",
+        json={"workload_manageability": 4, "expected_revision": 1},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res1.status_code == 200
+
+    # Stale second update with expected_revision=1 is rejected
+    res2 = client.patch(
+        f"/pulse-surveys/responses/{resp_id}",
+        json={"workload_manageability": 5, "expected_revision": 1},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res2.status_code == 409
+    assert "modified concurrently" in res2.json()["detail"]
+
+
+def test_two_edits_using_same_expected_revision_cannot_both_succeed(test_setup):
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr@example.com", role="manager")
+    team = create_team(fake_db, name="Alpha Team", manager_id=mgr["_id"])
+    emp = create_user(fake_db, email="emp@example.com", role="employee", team_id=team["_id"])
+    token = make_token(emp["_id"])
+
+    create_res = client.post(
+        "/pulse-surveys/responses",
+        json={"workload_manageability": 3, "work_life_balance": 3, "team_support": 3, "engagement": 3},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    resp_id = create_res.json()["id"]
+
+    # Request A with expected_revision = 1 succeeds
+    res_a = client.patch(
+        f"/pulse-surveys/responses/{resp_id}",
+        json={"workload_manageability": 4, "expected_revision": 1},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res_a.status_code == 200
+    assert res_a.json()["revision"] == 2
+
+    # Request B with the same expected_revision = 1 must fail with 409
+    res_b = client.patch(
+        f"/pulse-surveys/responses/{resp_id}",
+        json={"workload_manageability": 5, "expected_revision": 1},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res_b.status_code == 409
+    assert "modified concurrently" in res_b.json()["detail"]
+
+
+def test_revision_history_preserved_in_db_but_absent_from_manager_admin_apis(test_setup):
+    client, fake_db = test_setup
+    admin = create_user(fake_db, email="admin@example.com", role="admin")
+    mgr = create_user(fake_db, email="mgr@example.com", role="manager")
+    team = create_team(fake_db, name="Alpha Team", manager_id=mgr["_id"])
+    emp = create_user(fake_db, email="emp@example.com", role="employee", team_id=team["_id"])
+
+    token = make_token(emp["_id"])
+    admin_token = make_token(admin["_id"])
+    mgr_token = make_token(mgr["_id"])
+
+    create_res = client.post(
+        "/pulse-surveys/responses",
+        json={"workload_manageability": 3, "work_life_balance": 3, "team_support": 3, "engagement": 3, "optional_comment": "Secret 1"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    resp_id = create_res.json()["id"]
+
+    client.patch(
+        f"/pulse-surveys/responses/{resp_id}",
+        json={"workload_manageability": 4, "optional_comment": "Secret 2", "expected_revision": 1},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    # Check Manager API does not leak edit history or comments
+    mgr_res = client.get(f"/pulse-surveys/team-summary?team_id={team['_id']}", headers={"Authorization": f"Bearer {mgr_token}"})
+    assert "edit_history" not in mgr_res.text
+    assert "Secret 1" not in mgr_res.text
+    assert "Secret 2" not in mgr_res.text
+
+    # Check Admin API does not leak edit history or comments
+    admin_res = client.get("/admin/pulse-surveys", headers={"Authorization": f"Bearer {admin_token}"})
+    assert "edit_history" not in admin_res.text
+    assert "Secret 1" not in admin_res.text
+    assert "Secret 2" not in admin_res.text
+
+
+def test_legacy_records_remain_usable(test_setup):
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr@example.com", role="manager")
+    team = create_team(fake_db, name="Alpha Team", manager_id=mgr["_id"])
+    emp = create_user(fake_db, email="emp@example.com", role="employee", team_id=team["_id"])
+    token = make_token(emp["_id"])
+
+    # Legacy record without revision, is_edited, updated_at, edit_history
+    current_ws = get_current_week_start()
+    fake_db["weekly_pulse_responses"].docs.append({
+        "_id": ObjectId(),
+        "user_id": emp["_id"],
+        "team_id": team["_id"],
+        "week_start": current_ws,
+        "workload_manageability": 2,
+        "work_life_balance": 2,
+        "team_support": 2,
+        "engagement": 2,
+        "submitted_at": current_ws,
+    })
+    resp_id = str(fake_db["weekly_pulse_responses"].docs[0]["_id"])
+
+    patch_res = client.patch(
+        f"/pulse-surveys/responses/{resp_id}",
+        json={"workload_manageability": 5, "engagement": 5, "expected_revision": 1},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert patch_res.status_code == 200
+    data = patch_res.json()
+    assert data["workload_manageability"] == 5
+    assert data["engagement"] == 5
+    assert data["is_edited"] is True
+    assert data["revision"] == 2
+
+
+def test_legacy_record_revision_mismatch_rejected(test_setup):
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr@example.com", role="manager")
+    team = create_team(fake_db, name="Alpha Team", manager_id=mgr["_id"])
+    emp = create_user(fake_db, email="emp@example.com", role="employee", team_id=team["_id"])
+    token = make_token(emp["_id"])
+
+    # Legacy record without revision
+    current_ws = get_current_week_start()
+    fake_db["weekly_pulse_responses"].docs.append({
+        "_id": ObjectId(),
+        "user_id": emp["_id"],
+        "team_id": team["_id"],
+        "week_start": current_ws,
+        "workload_manageability": 2,
+        "work_life_balance": 2,
+        "team_support": 2,
+        "engagement": 2,
+        "submitted_at": current_ws,
+    })
+    resp_id = str(fake_db["weekly_pulse_responses"].docs[0]["_id"])
+
+    # Expected revision 2 for legacy record (which is treated as revision 1) must be rejected with 409
+    patch_res = client.patch(
+        f"/pulse-surveys/responses/{resp_id}",
+        json={"workload_manageability": 5, "expected_revision": 2},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert patch_res.status_code == 409
+    assert "modified concurrently" in patch_res.json()["detail"]

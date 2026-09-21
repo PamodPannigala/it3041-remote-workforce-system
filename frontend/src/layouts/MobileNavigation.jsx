@@ -21,6 +21,7 @@ export default function MobileNavigation({
       { id: "work-profile", label: "Work Profile" },
       { id: "my-tasks", label: "My Tasks" },
       { id: "team-messages", label: "Team Messages" },
+      { id: "weekly-pulse", label: "Weekly Pulse" },
     ],
     manager: [
       { id: "overview", label: "Overview" },
@@ -29,6 +30,7 @@ export default function MobileNavigation({
       { id: "team-profiles", label: "Team Profiles" },
       { id: "team-tasks", label: "Team Tasks" },
       { id: "team-messages", label: "Team Messages" },
+      { id: "pulse-insights", label: "Pulse Insights" },
     ],
     admin: [
       { id: "overview", label: "Overview" },
@@ -36,6 +38,7 @@ export default function MobileNavigation({
       { id: "teams", label: "Teams" },
       { id: "task-audit", label: "Task Audit" },
       { id: "message-audit", label: "Message Audit" },
+      { id: "pulse-audit", label: "Pulse Audit" },
     ],
   };
 
