@@ -80,6 +80,20 @@ from backend.app.modules.agents.runtime import (
     UnknownAgentError,
     UnknownToolError,
 )
+from backend.app.modules.agents.productivity import (
+    PRODUCTIVITY_AGENT_NAME,
+    PRODUCTIVITY_EVIDENCE_TOOL_NAME,
+    PRODUCTIVITY_SYSTEM_PROMPT,
+    DeterministicTaskMetrics,
+    ProductivityFindingOutput,
+    ProductivityTaskEvidenceTool,
+    compute_deterministic_task_metrics,
+    create_productivity_agent_definition,
+    create_productivity_evidence_tool,
+    execute_productivity_agent,
+    get_productivity_tool_name,
+    register_productivity_agent,
+)
 
 __all__ = [
     # Protocol
@@ -159,4 +173,17 @@ __all__ = [
     "StructuredAgentFindingOutput",
     "UnknownAgentError",
     "UnknownToolError",
+    # Productivity Agent
+    "DeterministicTaskMetrics",
+    "ProductivityFindingOutput",
+    "ProductivityTaskEvidenceTool",
+    "PRODUCTIVITY_AGENT_NAME",
+    "PRODUCTIVITY_EVIDENCE_TOOL_NAME",
+    "PRODUCTIVITY_SYSTEM_PROMPT",
+    "compute_deterministic_task_metrics",
+    "create_productivity_agent_definition",
+    "create_productivity_evidence_tool",
+    "execute_productivity_agent",
+    "get_productivity_tool_name",
+    "register_productivity_agent",
 ]
