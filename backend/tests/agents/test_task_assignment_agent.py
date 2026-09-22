@@ -1624,6 +1624,3 @@ def test_grounding_validator_detects_omission_of_top_ranked_candidate(fixed_now)
     ok, err = validate_task_assignment_grounding(omitted_top_output, metrics)
     assert not ok
     assert "Candidate sequence mismatch" in err
-
-
-

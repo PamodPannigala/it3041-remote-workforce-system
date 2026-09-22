@@ -1115,5 +1115,3 @@ def validate_task_assignment_grounding(
             return False, f"Candidate confidence {rec.confidence} exceeds deterministic suitability score {expected_cand.suitability_score}"
 
     return True, None
-
-
