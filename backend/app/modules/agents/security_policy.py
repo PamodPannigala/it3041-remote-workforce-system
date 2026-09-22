@@ -477,13 +477,53 @@ def validate_request_dependencies(
 # 5. Responsible AI Guardrails Policy
 # =========================================================================
 
-TASK_ASSIGNMENT_IS_RECOMMENDATION_ONLY: bool = True
-AUTOMATIC_TASK_MUTATION_PROHIBITED: bool = True
-HUMAN_CONFIRMATION_REQUIRED: bool = True
-WELLBEING_INFLUENCED_ASSIGNMENT_PROHIBITED: bool = True
-PROTECTED_ATTRIBUTES_PROHIBITED: bool = True
-MEDICAL_DIAGNOSIS_PROHIBITED: bool = True
-PUNITIVE_RANKING_PROHIBITED: bool = True
+import re
+
+PUNITIVE_PATTERNS = [
+    r"\bterminate\s+(the\s+)?(employee|worker|staff|member)\b",
+    r"\bfire\s+(the\s+)?(employee|worker|staff|member)\b",
+    r"\bpunish\s+(the\s+)?(employee|worker|staff|member)\b",
+    r"\bdemote\s+(the\s+)?(employee|worker|staff|member)\b",
+    r"\b(disciplinary\s+action|discipline\s+(the\s+)?(employee|worker))\b",
+    r"\b(worst\s+(employee|performer|worker))\b",
+    r"\b(lazy\s+(employee|performer|worker))\b",
+]
+
+NEGATION_PREFIXES = (
+    "do not ",
+    "don't ",
+    "avoid ",
+    "never ",
+    "should not ",
+    "must not ",
+    "without ",
+    "rather than ",
+    "refrain from ",
+)
+
+
+def _contains_affirmative_punitive_language(text: str) -> bool:
+    """
+    Checks if text contains affirmative punitive, disciplinary, or ranking recommendations.
+    Safely ignores advisory statements that advise AGAINST punitive action (e.g. 'do not terminate').
+    """
+    sentences = re.split(r"[.!?;\n]+", text.lower())
+    for sentence in sentences:
+        s = sentence.strip()
+        if not s:
+            continue
+        for pat in PUNITIVE_PATTERNS:
+            match = re.search(pat, s)
+            if match:
+                start_pos = match.start()
+                preceding = s[:start_pos].strip()
+                is_negated = any(
+                    preceding.endswith(neg.strip()) or neg in preceding
+                    for neg in NEGATION_PREFIXES
+                )
+                if not is_negated:
+                    return True
+    return False
 
 
 def validate_responsible_ai_guardrails(
@@ -539,13 +579,21 @@ def validate_responsible_ai_guardrails(
                     safe_message="Responsible AI violation: Medical diagnosis is strictly outside Wellbeing Agent scope",
                 )
 
-            punitive_terms = ["punish", "terminate employee", "demote", "worst employee", "fire employee"]
-            if any(p in summary_lower for p in punitive_terms):
-                return AuthorizationDecision(
-                    allowed=False,
-                    safe_reason_code="RESPONSIBLE_AI_PUNITIVE_RANKING_FORBIDDEN",
-                    safe_message="Responsible AI violation: Punitive rankings and actions are prohibited",
-                )
+    # 3. Universal Responsible-AI Boundaries (All Agents)
+    if finding:
+        combined_text = (
+            finding.summary
+            + " "
+            + " ".join(finding.recommended_actions)
+            + " "
+            + " ".join(finding.limitations)
+        )
+        if _contains_affirmative_punitive_language(combined_text):
+            return AuthorizationDecision(
+                allowed=False,
+                safe_reason_code="RESPONSIBLE_AI_PUNITIVE_RANKING_FORBIDDEN",
+                safe_message="Responsible AI violation: Punitive rankings, disciplinary actions, and terminations are prohibited",
+            )
 
     return AuthorizationDecision(
         allowed=True,
