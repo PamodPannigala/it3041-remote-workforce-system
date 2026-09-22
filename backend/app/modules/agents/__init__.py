@@ -113,6 +113,23 @@ from backend.app.modules.agents.collaboration_agent import (
     get_collaboration_tool_names,
     register_collaboration_agent,
 )
+from backend.app.modules.agents.wellbeing import (
+    DEFAULT_WEEKS_LOOKBACK,
+    MINIMUM_PULSE_RESPONSES_THRESHOLD,
+    WELLBEING_AGENT_NAME,
+    WELLBEING_PULSE_TOOL_NAME,
+    WELLBEING_SYSTEM_PROMPT,
+    DeterministicWellbeingMetrics,
+    WeeklyTeamPulseAggregate,
+    WellbeingFindingOutput,
+    WellbeingPulseEvidenceTool,
+    compute_deterministic_wellbeing_metrics,
+    create_wellbeing_agent_definition,
+    create_wellbeing_pulse_evidence_tool,
+    execute_wellbeing_agent,
+    get_wellbeing_tool_names,
+    register_wellbeing_agent,
+)
 
 __all__ = [
     # Protocol
@@ -223,4 +240,20 @@ __all__ = [
     "execute_collaboration_agent",
     "get_collaboration_tool_names",
     "register_collaboration_agent",
+    # Wellbeing Agent
+    "DEFAULT_WEEKS_LOOKBACK",
+    "MINIMUM_PULSE_RESPONSES_THRESHOLD",
+    "WELLBEING_AGENT_NAME",
+    "WELLBEING_PULSE_TOOL_NAME",
+    "WELLBEING_SYSTEM_PROMPT",
+    "DeterministicWellbeingMetrics",
+    "WeeklyTeamPulseAggregate",
+    "WellbeingFindingOutput",
+    "WellbeingPulseEvidenceTool",
+    "compute_deterministic_wellbeing_metrics",
+    "create_wellbeing_agent_definition",
+    "create_wellbeing_pulse_evidence_tool",
+    "execute_wellbeing_agent",
+    "get_wellbeing_tool_names",
+    "register_wellbeing_agent",
 ]
