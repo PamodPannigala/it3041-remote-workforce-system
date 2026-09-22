@@ -17,7 +17,12 @@ from backend.app.schemas import (
     UpdatePulseSurveyResponseRequest,
 )
 
-MINIMUM_AGGREGATE_RESPONSES = 3
+from backend.app.modules.pulse_surveys.constants import (
+    MINIMUM_AGGREGATE_RESPONSES,
+    PULSE_COLLECTION_NAME,
+    TEAMS_COLLECTION_NAME,
+    get_current_week_start,
+)
 
 router = APIRouter(prefix="/pulse-surveys", tags=["Weekly Pulse Surveys"])
 admin_pulse_surveys_router = APIRouter(
@@ -56,17 +61,6 @@ def _format_datetime_utc(dt: datetime | str | None) -> str | None:
         return f"{dt_str}+00:00"
     return dt_str
 
-
-def get_current_week_start(now: datetime | None = None) -> datetime:
-    """Derive the Monday 00:00:00 UTC datetime for the server's current UTC week."""
-    if now is None:
-        now = datetime.now(timezone.utc)
-    elif now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
-    else:
-        now = now.astimezone(timezone.utc)
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    return start - timedelta(days=start.weekday())
 
 
 def parse_week_start(date_str: str | None) -> datetime:
