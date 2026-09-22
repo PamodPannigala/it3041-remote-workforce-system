@@ -94,6 +94,25 @@ from backend.app.modules.agents.productivity import (
     get_productivity_tool_name,
     register_productivity_agent,
 )
+from backend.app.modules.agents.collaboration_agent import (
+    COLLABORATION_AGENT_NAME,
+    COLLABORATION_MESSAGE_TOOL_NAME,
+    COLLABORATION_SYSTEM_PROMPT,
+    COLLABORATION_TASK_BLOCKER_TOOL_NAME,
+    DEFAULT_LOOKBACK_DAYS,
+    STALE_BLOCKER_THRESHOLD_DAYS,
+    CollaborationFindingOutput,
+    CollaborationMessageEvidenceTool,
+    CollaborationTaskBlockerEvidenceTool,
+    DeterministicCollaborationMetrics,
+    compute_deterministic_collaboration_metrics,
+    create_collaboration_agent_definition,
+    create_collaboration_message_evidence_tool,
+    create_collaboration_task_blocker_evidence_tool,
+    execute_collaboration_agent,
+    get_collaboration_tool_names,
+    register_collaboration_agent,
+)
 
 __all__ = [
     # Protocol
@@ -186,4 +205,22 @@ __all__ = [
     "execute_productivity_agent",
     "get_productivity_tool_name",
     "register_productivity_agent",
+    # Collaboration Agent
+    "COLLABORATION_AGENT_NAME",
+    "COLLABORATION_MESSAGE_TOOL_NAME",
+    "COLLABORATION_SYSTEM_PROMPT",
+    "COLLABORATION_TASK_BLOCKER_TOOL_NAME",
+    "DEFAULT_LOOKBACK_DAYS",
+    "STALE_BLOCKER_THRESHOLD_DAYS",
+    "CollaborationFindingOutput",
+    "CollaborationMessageEvidenceTool",
+    "CollaborationTaskBlockerEvidenceTool",
+    "DeterministicCollaborationMetrics",
+    "compute_deterministic_collaboration_metrics",
+    "create_collaboration_agent_definition",
+    "create_collaboration_message_evidence_tool",
+    "create_collaboration_task_blocker_evidence_tool",
+    "execute_collaboration_agent",
+    "get_collaboration_tool_names",
+    "register_collaboration_agent",
 ]
