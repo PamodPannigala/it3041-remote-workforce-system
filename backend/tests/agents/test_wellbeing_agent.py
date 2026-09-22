@@ -1337,4 +1337,3 @@ def test_exact_security_reason_codes():
         ),
     )
     assert rai_rank.safe_reason_code == "RESPONSIBLE_AI_PUNITIVE_RANKING_FORBIDDEN"
-
