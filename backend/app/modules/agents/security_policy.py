@@ -501,6 +501,9 @@ NEGATION_PREFIXES = (
     "without ",
     "rather than ",
     "refrain from ",
+    "not ",
+    "cannot ",
+    "no ",
 )
 
 
@@ -579,7 +582,17 @@ def validate_responsible_ai_guardrails(
                 + " "
                 + " ".join(finding.limitations)
             ).lower()
-            diagnoses = ["diagnos", "clinical", "disorder", "depression", "anxiety disorder", "pathology"]
+            diagnoses = [
+                "diagnos",
+                "clinical",
+                "disorder",
+                "depression",
+                "anxiety disorder",
+                "pathology",
+                "burnout",
+                "burned out",
+                "mental health condition",
+            ]
             sentences = re.split(r"[.!?;\n]+", combined_text)
             for sentence in sentences:
                 s = sentence.strip()
