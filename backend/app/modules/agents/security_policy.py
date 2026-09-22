@@ -557,12 +557,31 @@ def validate_responsible_ai_guardrails(
         if finding:
             # Must be recommendation only, cannot contain automatic execution commands
             actions_text = " ".join(finding.recommended_actions).lower()
-            if "auto-assign" in actions_text or "force assignment" in actions_text or "commit assignment" in actions_text:
-                return AuthorizationDecision(
-                    allowed=False,
-                    safe_reason_code="RESPONSIBLE_AI_AUTO_MUTATION_FORBIDDEN",
-                    safe_message="Responsible AI violation: Task assignment must be recommendation-only requiring human approval",
-                )
+            auto_mutation_patterns = [
+                "auto-assign",
+                "auto assign",
+                "force assignment",
+                "commit assignment",
+            ]
+            sentences = re.split(r"[.!?;\n]+", actions_text)
+            for sentence in sentences:
+                s = sentence.strip()
+                if not s:
+                    continue
+                for pat in auto_mutation_patterns:
+                    if pat in s:
+                        start_pos = s.find(pat)
+                        preceding = s[:start_pos].strip()
+                        is_negated = any(
+                            preceding.endswith(neg.strip()) or neg in preceding
+                            for neg in NEGATION_PREFIXES
+                        )
+                        if not is_negated:
+                            return AuthorizationDecision(
+                                allowed=False,
+                                safe_reason_code="RESPONSIBLE_AI_AUTO_MUTATION_FORBIDDEN",
+                                safe_message="Responsible AI violation: Task assignment must be recommendation-only requiring human approval",
+                            )
 
             # Employment recommendations require evidence or declared limitations
             if not finding.evidence_refs and not finding.limitations:
