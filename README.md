@@ -424,10 +424,75 @@ Comprehensive test suite (`backend/tests/agents/test_collaboration_agent.py`) ve
 
 ---
 
-## 10. Current Architecture & Session Limitations
+## 10. Well-being Specialist Agent
+
+The system implements the **Well-being Specialist Agent** natively on top of the shared custom Python multi-agent runtime.
+
+### Purpose & Scope
+The Well-being Agent analyzes privacy-preserving, aggregated Weekly Pulse Survey metrics and returns explainable, objective, supportive, and advisory team well-being observations. It assists managers and organizations in understanding workload manageability, work-life balance signals, and team support trends without ever unmasking individual respondents or making medical claims.
+
+### Authorized Data Sources & Strict Projections
+- **Authorized Pulse Fields**: `team_id`, `week_start`, `workload_manageability` (1–5), `work_life_balance` (1–5), `team_support` (1–5), `engagement` (1–5).
+- **Strict Privacy Exclusions**: The agent strictly excludes and never projects or fetches:
+  - `user_id` (respondent identifiers)
+  - Employee names or email addresses
+  - Raw individual response ratings
+  - `optional_comment` (confidential free-text comments)
+  - `edit_history` and internal revision logs
+  - Collaboration messages, task descriptions, employee profiles, or credentials.
+
+### Privacy Boundary & k-Anonymity Threshold (k = 3)
+The pulse survey privacy contract is strictly enforced before evidence reaches the LLM:
+- **Minimum Response Threshold**: If a team has fewer than 3 responses in a given week, aggregate metrics are withheld and marked as `INSUFFICIENT DATA`.
+- **Zero Raw Data Exposure**: Only aggregated metrics satisfying the k=3 privacy threshold are converted into evidence references.
+- **Cross-Agent Isolation**: Well-being findings are strictly prohibited from flowing into the Task Assignment Agent (`validate_dependency_flow` and `validate_responsible_ai_guardrails` reject any such flow).
+
+### Role & Team Scoping (Database Pre-Filtering)
+Authorization filters are strictly applied at the database level before documents become candidates:
+- **Employee**: Scoped strictly to the employee's assigned team (`assigned_team_id`). Cross-team queries are rejected. Unassigned employees receive an empty evidence set.
+- **Manager**: Scoped strictly to teams the manager manages (`team_id in managed_team_ids`). Unmanaged team queries are rejected. Managers with no managed teams receive an empty evidence set.
+- **Admin**: Read-only organization-wide or requested-team aggregate analysis within authorized well-being intent boundaries.
+
+### Deterministic Python Metrics
+Key well-being and trend metrics are calculated deterministically in Python prior to LLM invocation:
+- **Response Counts**: Total response counts per team and UTC week.
+- **Weekly Averages**: Arithmetic mean workload manageability, work-life balance, team support, and engagement scores (1–5) computed strictly for weeks meeting the k=3 threshold.
+- **Week-over-Week Trends**: Difference between the two most recent privacy-safe weeks for a team.
+- **Privacy-Safe Weeks Count**: Count of weekly buckets meeting the minimum response threshold.
+- **Insufficient-Data Weeks Count**: Count of weekly buckets with fewer than 3 responses.
+- **Invalid Rating Handling**: Rejects booleans, non-numeric strings, NaNs, infinities, and values outside 1–5 without raising uncaught exceptions.
+
+### Structured Output Contract (`WellbeingFindingOutput`)
+The agent produces a strictly validated, frozen Pydantic model (`extra="forbid"`, `frozen=True`):
+- `summary`: Concise, supportive executive summary of team well-being signals.
+- `aggregate_observations`: Factual observations based on verified aggregate ratings.
+- `trend_observations`: Factual week-over-week trend observations across privacy-safe weeks.
+- `recommended_actions`: Supportive, constructive, human-reviewed advisory actions.
+- `confidence`: Bounded numeric confidence score (0.0 to 1.0).
+- `limitations`: Explicit disclosures regarding participation rates and sample limitations.
+
+### Responsible AI Controls
+- **Medical/Clinical Diagnosis Prohibition**: Strictly prohibits diagnosing mental health conditions, clinical depression, anxiety disorders, burnout, or any medical condition.
+- **Safe Negated Guidance Accepted**: Statements advising against diagnosis or punitive action (e.g., *"Do not diagnose individual employees"*, *"Avoid punitive action"*) are permitted.
+- **No Ranking or Punishment**: Prohibits ranking employees, assigning blame, or recommending demotion, discipline, or termination.
+- **Advisory & Supportive**: Focuses entirely on organizational workload distribution, peer support, and constructive manager check-ins.
+
+### Offline Testing Strategy
+Comprehensive test suite (`backend/tests/agents/test_wellbeing_agent.py`) verifies all features offline without network calls or external credentials:
+- Role/team MongoDB query filtering and pre-query authorization.
+- k-Anonymity threshold boundary tests (fewer-than-3 vs exact-3 responses).
+- PII and confidential comment exclusion.
+- Deterministic metric calculations, UTC boundary handling, and week-over-week trends.
+- Structured output validation, single-call gateway verification, and sanitized error handling.
+- Responsible AI guardrail enforcement and Well-being → Task Assignment dependency rejection.
+- Audit privacy verification and zero database mutation.
+
+---
+
+## 11. Current Architecture & Session Limitations
 
 1. **In-Memory Session Storage:** JWT access tokens are stored strictly in-memory (React state) to prevent browser storage XSS exposure. Page reloads currently require signing in again.
 2. **Token Lifetime & Refresh:** Access tokens expire in 15 minutes. Refresh tokens and server-side token revocation blocklists are not yet implemented.
 3. **Dynamic Role Verification:** The backend resolves the token subject against the live database record on each request, ensuring role modifications or deactivations take effect immediately.
 4. **Role Scope & Privacy Thresholding:** Weekly pulse surveys provide employee self-submission, manager team aggregates with a strict minimum response threshold of 3 for anonymity, and admin privacy-safe audit metadata. No individual well-being scores, mood/stress classifications, or diagnostic labels are computed or exposed.
-5. **Specialist AI Agents:** The Productivity Specialist Agent and Collaboration Specialist Agent are fully implemented on the custom runtime. Other specialist agents (*Wellbeing, Task Assignment*) and the Coordinator Agent will follow on their respective feature branches.
+5. **Specialist AI Agents:** The Productivity Specialist Agent, Collaboration Specialist Agent, and Well-being Specialist Agent are fully implemented on the custom runtime. The Task Assignment Agent and Coordinator Agent will follow on their respective feature branches.
