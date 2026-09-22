@@ -308,10 +308,65 @@ The runtime structurally enforces the privacy boundary preventing Well-being fin
 
 ---
 
-## 8. Current Architecture & Session Limitations
+## 8. Productivity Specialist Agent
+
+The system implements the **Productivity Specialist Agent** natively on top of the shared custom Python multi-agent runtime.
+
+### Purpose & Scope
+The Productivity Agent analyzes authorized task-management evidence and returns explainable, advisory productivity observations and factual workload insights. It does not perform autonomous task mutations, employee rankings, performance scorings, or punitive evaluations.
+
+### Authorized Data Sources & Exclusions
+- **Authorized Task Fields**: `_id`, `title`, `description`, `status` (`todo`, `in_progress`, `blocked`, `completed`), `progress_percentage` (0–100), `priority`, `due_date`, `assigned_to`, `team_id`, `blockers` (`description`, `is_resolved`, `resolved_at`), `progress_history` (`notes`, `updated_at`), and `required_skills` (to understand task context).
+- **Strict Privacy Exclusions**: The agent never accesses or queries weekly pulse surveys, individual ratings, pulse comments, well-being metrics, collaboration message content, or protected personal characteristics.
+
+### Role & Team Scoping (Database Pre-Filtering)
+Authorization filters are strictly applied at the database level before documents become candidates:
+- **Employee**: Strictly filtered to tasks assigned to the authenticated user (`assigned_to == user_id`) and belonging to their authorized team (`team_id == assigned_team_id`). Cross-team queries are rejected.
+- **Manager**: Scoped strictly to tasks belonging to teams the manager actually manages (`team_id in managed_team_ids`). Unmanaged team queries are rejected.
+- **Admin**: Audits organization-wide tasks within the authorized productivity intent boundaries.
+- **Unassigned User**: Returns an empty authorized evidence set; never leaks organization or other team data.
+
+### Deterministic Python Metrics
+Key workload and velocity metrics are calculated deterministically in Python prior to LLM invocation (not guessed by the LLM):
+- **Total Authorized Tasks**: Count of authorized tasks matching the scope.
+- **Counts by Status**: Completed, In Progress, Blocked, and To-Do.
+- **Completed Task**: Status is `completed` (or progress is 100%).
+- **Blocked Task**: Status is `blocked` or contains unresolved blockers (`is_resolved == false`).
+- **Overdue Task**: Non-completed task where `due_date` is strictly before the current UTC timestamp (`due_date < now_utc`).
+- **Due Soon Task**: Non-completed task with `due_date` falling within the next 7 days in UTC (`now_utc <= due_date <= now_utc + 7 days`).
+- **Average Progress**: Arithmetic mean of valid `progress_percentage` (0–100) across authorized tasks; safely omitted if no tasks have valid progress.
+- **Blockers Count**: Explicit count of unresolved blockers vs resolved blockers.
+
+### Structured Output Contract (`ProductivityFindingOutput`)
+The agent produces a strictly validated Pydantic model (`extra="forbid"`):
+- `summary`: Concise, factual executive summary.
+- `workload_observations`: Bulleted list of factual task distribution and volume observations.
+- `completion_and_overdue_observations`: Factual delivery milestone and overdue task observations.
+- `blocker_observations`: Observations on active blockers and delivery impediments.
+- `recommended_actions`: Concrete, evidence-backed advisory recommendations.
+- `confidence`: Bounded numeric confidence score (0.0 to 1.0).
+- `limitations`: Explicit disclosures when evidence is sparse, missing, or limited.
+
+### Security, Privacy & Responsible AI Controls
+- **Advisory Only**: Output recommendations are strictly advisory for human managers/employees; autonomous mutations are prohibited.
+- **No Ranking or Punishment**: Strictly forbids employee ranking, peer comparison, punitive actions, or automated termination/disciplinary recommendations.
+- **No Medical/Well-being Inferences**: Prohibits mental health, stress, or diagnostic claims.
+- **Untrusted Evidence Boundary**: Task titles, descriptions, and notes are formatted into structured JSON evidence blocks and treated as untrusted data, neutralizing prompt injection attempts.
+- **Single LLM Gateway Call**: Invokes the shared `LLMGateway` exactly once per execution with bounded timeout and exponential retry handling.
+
+### Offline Testing Strategy
+Comprehensive test suite (`backend/tests/agents/test_productivity_agent.py`) verifies all features offline without network calls or external credentials:
+- Role/team MongoDB query filtering and pre-query authorization.
+- Deterministic metric calculations, UTC boundary handling, and legacy/missing field resilience.
+- Structured output validation, single-call gateway verification, and sanitized error handling.
+- Responsible AI guardrail enforcement and audit sink log sanitization.
+
+---
+
+## 9. Current Architecture & Session Limitations
 
 1. **In-Memory Session Storage:** JWT access tokens are stored strictly in-memory (React state) to prevent browser storage XSS exposure. Page reloads currently require signing in again.
 2. **Token Lifetime & Refresh:** Access tokens expire in 15 minutes. Refresh tokens and server-side token revocation blocklists are not yet implemented.
 3. **Dynamic Role Verification:** The backend resolves the token subject against the live database record on each request, ensuring role modifications or deactivations take effect immediately.
 4. **Role Scope & Privacy Thresholding:** Weekly pulse surveys provide employee self-submission, manager team aggregates with a strict minimum response threshold of 3 for anonymity, and admin privacy-safe audit metadata. No individual well-being scores, mood/stress classifications, or diagnostic labels are computed or exposed.
-5. **Specialist AI Agents:** The four specialist agents (*Productivity, Collaboration, Wellbeing, Task Assignment*) will be implemented on their respective feature branches on top of this shared runtime; no synthetic results are simulated.
+5. **Specialist AI Agents:** The Productivity Specialist Agent is fully implemented on the custom runtime. Other specialist agents (*Collaboration, Wellbeing, Task Assignment*) and the Coordinator Agent will follow on their respective feature branches.
