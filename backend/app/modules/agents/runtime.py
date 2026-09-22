@@ -708,6 +708,28 @@ class AgentRuntime:
                 # Execute tool safely
                 try:
                     tool_refs = await tool.execute(context)
+                except AgentAuthorizationError as e:
+                    logger.warning("Tool %s authorization failed: %s", t_name, e)
+                    await self._record_audit(
+                        create_authorization_audit_event(
+                            correlation_id=correlation_id,
+                            actor_user_id=principal.user_id,
+                            actor_role=principal.role,
+                            agent=target_agent,
+                            allowed=False,
+                            safe_reason_code=e.safe_reason_code,
+                            intent=request.intent,
+                        )
+                    )
+                    return create_agent_response(
+                        correlation_id=correlation_id,
+                        sender=target_agent,
+                        recipient=request.sender,
+                        status="failed",
+                        message_type="error",
+                        error_code=e.safe_reason_code,
+                        safe_error_message=e.safe_message,
+                    )
                 except Exception as e:
                     logger.warning("Tool %s execution failed: %s", t_name, e)
                     await self._record_audit(
@@ -718,7 +740,7 @@ class AgentRuntime:
                             agent=target_agent,
                             event_type="responsible_ai_policy_applied",
                             outcome="failure",
-                            safe_reason_code="TOOL_EXECUTION_FAILURE",
+                            safe_reason_code=getattr(e, "safe_reason_code", "TOOL_EXECUTION_FAILURE"),
                         )
                     )
                     return create_agent_response(
@@ -727,8 +749,8 @@ class AgentRuntime:
                         recipient=request.sender,
                         status="failed",
                         message_type="error",
-                        error_code="TOOL_EXECUTION_FAILURE",
-                        safe_error_message=f"Execution of tool '{t_name}' failed",
+                        error_code=getattr(e, "safe_reason_code", "TOOL_EXECUTION_FAILURE"),
+                        safe_error_message=getattr(e, "safe_message", f"Execution of tool '{t_name}' failed"),
                     )
 
                 # Apply team-scope policy to each evidence item (defense in depth)
