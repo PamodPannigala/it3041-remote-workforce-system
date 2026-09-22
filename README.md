@@ -255,10 +255,63 @@ The system provides a centralized security policy layer and privacy-safe audit l
 
 ---
 
-## 7. Current Architecture & Session Limitations
+## 7. Agentic AI Custom Multi-Agent Runtime – Phase 3
+
+The system implements a lightweight, application-specific, custom multi-agent runtime written natively in Python without relying on external agent frameworks (e.g., CrewAI, LangGraph, AutoGen).
+
+### Why a Custom Runtime?
+- **Zero Heavy External Dependencies**: Avoids dependency bloat, transitive pinning conflicts, and speculative third-party framework changes.
+- **Strict Compliance with Existing Architecture**: Reuses the project's Pydantic v2 schemas, `LLMGateway`, `AuthenticatedPrincipal`, `SecurityPolicy`, and `AgentAuditSink` directly.
+- **Zero Unsafe Features**: By design, the custom runtime contains no autonomous agent delegation, no dynamic code execution, no persistent conversational memory across requests, and no uncontrolled tool invocation loops.
+
+### Runtime Architecture & Responsibilities
+- **`AgentRuntimeConfig`**: Strict immutable configuration enforcing bounded timeouts, maximum concurrent executions, evidence payload boundaries, and output character limits (`extra="forbid"`).
+- **`AgentDefinition`**: Declarative immutable registration model binding an agent's identity, role, goal, allowed intents, allowed evidence source types, system instructions, and Pydantic response schema.
+- **`ExecutionContext`**: Strongly typed execution context carrying the server-derived `AuthenticatedPrincipal`, request envelope, upstream dependency findings, and correlation ID.
+- **`BaseAgentTool` & `AgentTool` Protocol**: Explicit, typed tool interface executing deterministic async evidence gathering. Tools are validated against target agent identity and required capabilities prior to execution.
+- **`AgentRuntime`**: Central execution manager performing the end-to-end execution flow:
+  1. Enforces user intent RBAC and agent capability matrix via `SecurityPolicy`.
+  2. Enforces cross-agent dependency flow and correlation ID provenance.
+  3. Enforces team-scope boundaries on all retrieved evidence references (defense-in-depth).
+  4. Formats untrusted workplace evidence into prompt-injection-safe JSON data blocks.
+  5. Invokes `LLMGateway` exactly once with bounded execution timeouts (`asyncio.wait_for`).
+  6. Validates structured LLM outputs against declared Pydantic response models.
+  7. Enforces Responsible AI guardrails (advisory task assignments, no punitive rankings, no medical diagnoses).
+  8. Emits privacy-safe structured audit events (`AgentAuditEvent`) for both success and failure outcomes.
+- **`execute_many`**: Bounded concurrent execution helper executing independent requests concurrently while respecting `max_concurrent_executions`, preserving input ordering, and enforcing independent security checks per item.
+- **`FakeAgentRuntime`**: Deterministic offline test double allowing comprehensive testing of specialist agents and supervisor flows without network requests or external LLM credentials.
+
+### Architectural Separation of Concerns
+```
+[FastAPI Auth & Session] -> AuthenticatedPrincipal (authoritative server-side identity)
+         │
+         ▼
+[AgentRequest Envelope] -> Protocol 1.0 (correlation_id, sender, recipient, intent)
+         │
+         ▼
+[Security Policy] --------> RBAC, team-scope validation, capability allowlist, provenance
+         │
+         ▼
+[AgentRuntime] -----------> Explicit tool gathering, evidence formatting, bounded timeout
+         │
+         ▼
+[LLMGateway] -------------> Single execution path, structured Pydantic output validation
+         │
+         ▼
+[Audit Logging] ----------> Privacy-safe audit events (zero prompts, evidence snippets, or keys)
+```
+
+### Privacy & Well-being Isolation Boundary
+The runtime structurally enforces the privacy boundary preventing Well-being findings or pulse data from influencing Task Assignment decisions:
+- `validate_dependency_flow()` strictly rejects any dependency finding from `wellbeing` to `task_assigning`.
+- `validate_responsible_ai_guardrails()` prohibits automated task mutation and requires all task recommendations to be advisory with human manager confirmation.
+
+---
+
+## 8. Current Architecture & Session Limitations
 
 1. **In-Memory Session Storage:** JWT access tokens are stored strictly in-memory (React state) to prevent browser storage XSS exposure. Page reloads currently require signing in again.
 2. **Token Lifetime & Refresh:** Access tokens expire in 15 minutes. Refresh tokens and server-side token revocation blocklists are not yet implemented.
 3. **Dynamic Role Verification:** The backend resolves the token subject against the live database record on each request, ensuring role modifications or deactivations take effect immediately.
 4. **Role Scope & Privacy Thresholding:** Weekly pulse surveys provide employee self-submission, manager team aggregates with a strict minimum response threshold of 3 for anonymity, and admin privacy-safe audit metadata. No individual well-being scores, mood/stress classifications, or diagnostic labels are computed or exposed.
-5. **Specialist AI Agents:** The four specialist agents (*Productivity, Collaboration, Wellbeing, Task Assignment*) are designated for development on their respective feature branches; no synthetic results are simulated.
+5. **Specialist AI Agents:** The four specialist agents (*Productivity, Collaboration, Wellbeing, Task Assignment*) will be implemented on their respective feature branches on top of this shared runtime; no synthetic results are simulated.
