@@ -130,6 +130,25 @@ from backend.app.modules.agents.wellbeing import (
     get_wellbeing_tool_names,
     register_wellbeing_agent,
 )
+from backend.app.modules.agents.task_assignment import (
+    TASK_ASSIGNING_AGENT_NAME,
+    TASK_ASSIGNMENT_EVIDENCE_TOOL_NAME,
+    TASK_ASSIGNMENT_SYSTEM_PROMPT,
+    CandidateRecommendationOutput,
+    CandidateSkillMatch,
+    CandidateWorkloadMetrics,
+    DeterministicTaskAssignmentMetrics,
+    TaskAssignmentEvidenceTool,
+    TaskAssignmentFindingOutput,
+    compute_deterministic_task_assignment_metrics,
+    create_task_assignment_agent_definition,
+    create_task_assignment_evidence_tool,
+    execute_task_assignment_agent,
+    get_task_assignment_tool_name,
+    get_task_assignment_tool_names,
+    register_task_assignment_agent,
+    validate_task_assignment_grounding,
+)
 
 __all__ = [
     # Protocol
@@ -256,4 +275,22 @@ __all__ = [
     "execute_wellbeing_agent",
     "get_wellbeing_tool_names",
     "register_wellbeing_agent",
+    # Task Assignment Agent
+    "CandidateRecommendationOutput",
+    "CandidateSkillMatch",
+    "CandidateWorkloadMetrics",
+    "DeterministicTaskAssignmentMetrics",
+    "TaskAssignmentEvidenceTool",
+    "TaskAssignmentFindingOutput",
+    "TASK_ASSIGNING_AGENT_NAME",
+    "TASK_ASSIGNMENT_EVIDENCE_TOOL_NAME",
+    "TASK_ASSIGNMENT_SYSTEM_PROMPT",
+    "compute_deterministic_task_assignment_metrics",
+    "create_task_assignment_agent_definition",
+    "create_task_assignment_evidence_tool",
+    "execute_task_assignment_agent",
+    "get_task_assignment_tool_name",
+    "get_task_assignment_tool_names",
+    "register_task_assignment_agent",
+    "validate_task_assignment_grounding",
 ]
