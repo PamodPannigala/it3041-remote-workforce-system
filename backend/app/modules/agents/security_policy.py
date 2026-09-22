@@ -487,6 +487,8 @@ PUNITIVE_PATTERNS = [
     r"\b(disciplinary\s+action|discipline\s+(the\s+)?(employee|worker))\b",
     r"\b(worst\s+(employee|performer|worker))\b",
     r"\b(lazy\s+(employee|performer|worker))\b",
+    r"\bblame\s+(the\s+)?(employee|worker|staff|member|individual|person)\b",
+    r"\brank\s+(the\s+)?(employee|worker|staff|member|individual)s?\b",
 ]
 
 NEGATION_PREFIXES = (
@@ -567,17 +569,36 @@ def validate_responsible_ai_guardrails(
                     safe_message="Responsible AI violation: Recommendations require evidence references or explicit limitations",
                 )
 
-    # 2. Wellbeing Boundaries
-    if agent == "wellbeing" or intent == "wellbeing_analysis":
+    # 2. Wellbeing & Medical / Clinical Diagnosis Boundaries
+    if agent in ("wellbeing", "collaboration") or intent in ("wellbeing_analysis", "collaboration_analysis"):
         if finding:
-            summary_lower = finding.summary.lower()
+            combined_text = (
+                finding.summary
+                + " "
+                + " ".join(finding.recommended_actions)
+                + " "
+                + " ".join(finding.limitations)
+            ).lower()
             diagnoses = ["diagnos", "clinical", "disorder", "depression", "anxiety disorder", "pathology"]
-            if any(d in summary_lower for d in diagnoses):
-                return AuthorizationDecision(
-                    allowed=False,
-                    safe_reason_code="RESPONSIBLE_AI_MEDICAL_DIAGNOSIS_FORBIDDEN",
-                    safe_message="Responsible AI violation: Medical diagnosis is strictly outside Wellbeing Agent scope",
-                )
+            sentences = re.split(r"[.!?;\n]+", combined_text)
+            for sentence in sentences:
+                s = sentence.strip()
+                if not s:
+                    continue
+                for d in diagnoses:
+                    if d in s:
+                        start_pos = s.find(d)
+                        preceding = s[:start_pos].strip()
+                        is_negated = any(
+                            preceding.endswith(neg.strip()) or neg in preceding
+                            for neg in NEGATION_PREFIXES
+                        )
+                        if not is_negated:
+                            return AuthorizationDecision(
+                                allowed=False,
+                                safe_reason_code="RESPONSIBLE_AI_MEDICAL_DIAGNOSIS_FORBIDDEN",
+                                safe_message=f"Responsible AI violation: Medical diagnosis is strictly outside {agent.capitalize()} Agent scope",
+                            )
 
     # 3. Universal Responsible-AI Boundaries (All Agents)
     if finding:
