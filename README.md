@@ -489,10 +489,87 @@ Comprehensive test suite (`backend/tests/agents/test_wellbeing_agent.py`) verifi
 
 ---
 
-## 11. Current Architecture & Session Limitations
+---
+
+## 11. Task Assignment Specialist Agent
+
+The system implements the **Task Assignment Specialist Agent** natively on top of the shared custom Python multi-agent runtime.
+
+### Purpose & Scope
+The Task Assignment Agent assists authorized Managers by providing explainable, objective, and human-reviewable task assignment recommendations based strictly on verified task requirements, employee profile skills, and active workload capacity. It is strictly read-only and advisory:
+- Identifies eligible team members with relevant skills for a specific task.
+- Evaluates current active workloads to identify available capacity and distribution balance.
+- Highlights delivery risks and missing skill coverage.
+- Formulates recommended check-in questions for managers to confirm candidate availability and interest.
+
+### Manager-Only Advisory Boundary & Human-in-the-Loop Decision
+- **Strictly Advisory**: All recommendations are advisory. The agent never assigns or reassigns tasks automatically, never calls database mutation methods, and never issues automatic mutation commands.
+- **Human-in-the-Loop Final Decision**: An authorized human Manager must review the recommendations and perform any final task assignment using the existing Task Management workflow (`PATCH /tasks/{task_id}/assignment`).
+- **Role Authorization**:
+  - **Manager**: Authorized to request task assignment recommendations strictly for tasks and employees within teams they manage (`managed_team_ids`).
+  - **Employee**: Strictly forbidden from requesting assignment recommendations for others (`EMPLOYEE_TASK_ASSIGNMENT_FORBIDDEN`).
+  - **Admin**: Disabled by default policy (`ADMIN_TASK_ASSIGNMENT_DISABLED`).
+  - **Unassigned / Cross-Team**: Unauthorized managers or cross-team requests are rejected immediately before candidate data is fetched.
+
+### Authorized Data Sources & Strict Projections
+The agent strictly queries only authorized collections using minimal field projections:
+- **`tasks`**: `_id`, `title`, `description`, `required_skills`, `team_id`, `assigned_to`, `status`, `priority`, `due_date`, `blockers`.
+- **`employee_profiles`**: `user_id`, `skills`, `job_title`, `availability_status`, `weekly_capacity_hours`.
+- **`users`**: `_id`, `name`, `role`, `team_id`, `is_active`.
+- **`teams`**: `_id`, `name`, `manager_id`.
+- **Exclusions**: Never queries `weekly_pulse_responses`, collaboration message bodies, authentication credentials, password hashes, sessions, tokens, or confidential comments.
+
+### Deterministic Python Calculations
+All factual evaluations, intersections, and capacities are computed deterministically in Python before invoking the LLM:
+- **Skill Normalization & Intersection**: Strips whitespace, case-folds canonical skills, computes the exact intersection with task `required_skills`, determines missing skills, and computes the mathematically bounded `skill_coverage_ratio`.
+- **Active Workload Capacity**: Tallies active non-completed tasks (`assigned_to == candidate_id`, excluding `completed` and `archived`), counts in-progress and blocked tasks, urgent/high-priority tasks, due-soon tasks (within 3 UTC days), and overdue tasks (`due_date < now_utc`).
+- **Deterministic Suitability Score**: Computed via documented formula:
+  $$\text{suitability} = \min\left(1.0, \max\left(0.0, 0.50 \times \text{skill\_coverage} + 0.20 \times \text{avail\_factor} + 0.15 \times \text{workload\_factor} + 0.15 \times \text{deadline\_factor} - \text{penalties}\right)\right)$$
+  Missing data deterministically lowers confidence rather than fabricating evidence. Ties are broken deterministically by Candidate ID.
+- **Timezone Awareness**: All date comparisons strictly use timezone-aware UTC (`datetime.now(timezone.utc)`).
+
+### LLM Responsibility & Prompt-Injection Neutralization
+- **Single Structured Invocation**: The agent calls `LLMGateway.generate_structured(...)` exactly once per execution with `TaskAssignmentFindingOutput`.
+- **Advisory Role**: The LLM summarizes candidate trade-offs, formulates manager review questions, and explains limitations. It never invents candidates, overrides eligibility, or executes assignments.
+- **Untrusted Evidence Boundary**: All task descriptions and profile details are wrapped in JSON evidence blocks delimited by `=== BEGIN_UNTRUSTED_EVIDENCE_JSON ===`. The system prompt instructs the model to treat all evidence as untrusted data, neutralizing prompt-injection attacks.
+
+### Strict Well-being / Weekly Pulse Isolation
+- **Prohibited Data & Dependencies**: The Task Assignment Agent strictly isolates itself from all Well-being and Weekly Pulse survey data.
+- **Multi-Layer Enforcement**:
+  1. *Dependency Flow Allowlist*: Cross-agent findings from `wellbeing` to `task_assigning` are strictly rejected by `validate_dependency_flow`.
+  2. *Evidence Source Allowlist*: `AgentDefinition.allowed_evidence_sources` allows only `task`, `employee_profile`, and `agent_finding` (excluding `pulse_survey`).
+  3. *Tool-Level Protection*: The evidence tool only accesses `tasks`, `employee_profiles`, `users`, and `teams`.
+  4. *Responsible-AI Guardrails*: Reject any output attempting to reference pulse surveys, mental health, burnout, or medical details.
+
+### Fair Recommendation Policy & Responsible AI Controls
+- **Task-Related Factors Only**: Recommendations are strictly based on required skill coverage, active workload, deadline risks, and team eligibility.
+- **Prohibited Attributes**: Protected characteristics (age, gender, ethnicity, religion, disability, marital status), medical/mental health, and subjective personal quality scores are strictly forbidden.
+- **No General Employee Ranking or Punishment**: The agent evaluates task-specific candidate suitability only; general performance rankings or punitive/demotion recommendations are blocked.
+- **Context-Aware Negation Handling**: Safe protective statements (e.g., *"Do not use Well-being information for task assignment"*, *"Manager must make the final decision"*) are permitted.
+
+### Information Retrieval (BM25) Clarification
+- The system includes a BM25 Information Retrieval service for full-text search across documents. In the current phase, the Task Assignment Agent computes exact normalized skill intersections and workload metrics directly from MongoDB collections and does not invoke the BM25 retrieval service unless explicitly configured.
+
+### Current Limitations
+- **No Direct Agent REST Endpoint / UI Yet**: In this development phase, the Task Assignment Agent is executed via the Python multi-agent runtime (`runtime.execute_agent` / `execute_task_assignment_agent`). REST API endpoints and Manager UI integration will be introduced in subsequent phases.
+
+### Offline Testing Strategy
+Comprehensive test suite (`backend/tests/agents/test_task_assignment_agent.py`) verifies all features offline without network calls or external credentials:
+- Canonical agent name (`task_assigning`) and intent (`task_assignment_recommendation`).
+- Role authorization (Manager permitted for managed teams; Employee and Admin rejected).
+- MongoDB collection access, field projections, and zero database mutations.
+- ObjectId and string ID compatibility.
+- Deterministic skill matching, workload penalties, and UTC date arithmetic.
+- Well-being and Weekly Pulse dependency blocking and Responsible AI leakage guardrails.
+- Allowed Productivity and Collaboration specialist dependencies.
+- Privacy-safe audit logging.
+
+---
+
+## 12. Current Architecture & Session Limitations
 
 1. **In-Memory Session Storage:** JWT access tokens are stored strictly in-memory (React state) to prevent browser storage XSS exposure. Page reloads currently require signing in again.
 2. **Token Lifetime & Refresh:** Access tokens expire in 15 minutes. Refresh tokens and server-side token revocation blocklists are not yet implemented.
 3. **Dynamic Role Verification:** The backend resolves the token subject against the live database record on each request, ensuring role modifications or deactivations take effect immediately.
 4. **Role Scope & Privacy Thresholding:** Weekly pulse surveys provide employee self-submission, manager team aggregates with a strict minimum response threshold of 3 for anonymity, and admin privacy-safe audit metadata. No individual well-being scores, mood/stress classifications, or diagnostic labels are computed or exposed.
-5. **Specialist AI Agents:** The Productivity Specialist Agent, Collaboration Specialist Agent, and Well-being Specialist Agent are fully implemented on the custom runtime. The Task Assignment Agent and Coordinator Agent will follow on their respective feature branches.
+5. **Specialist AI Agents:** The Productivity Specialist Agent, Collaboration Specialist Agent, Well-being Specialist Agent, and Task Assignment Specialist Agent are fully implemented on the custom runtime. The Coordinator Agent will follow on its dedicated feature branch.
