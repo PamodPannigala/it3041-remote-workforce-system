@@ -363,10 +363,71 @@ Comprehensive test suite (`backend/tests/agents/test_productivity_agent.py`) ver
 
 ---
 
-## 9. Current Architecture & Session Limitations
+## 9. Collaboration Specialist Agent
+
+The system implements the **Collaboration Specialist Agent** natively on top of the shared custom Python multi-agent runtime.
+
+### Purpose & Scope
+The Collaboration Agent analyzes authorized team collaboration messages and task-blocker evidence to return explainable, objective, and advisory communication pattern insights, dependency risks, and blocker bottlenecks. It does not perform employee rankings, sentiment scoring on individuals, punitive recommendations, or autonomous mutations.
+
+### Authorized Data Sources & Exclusions
+- **Authorized Collaboration Message Fields**: `_id`, `team_id`, `sender_id`, `content`, `created_at`, `updated_at`, `edited_at`, `is_deleted`, `deleted_at`.
+- **Authorized Task & Blocker Fields**: `_id`, `team_id`, `status`, `title`, `description`, `blockers` (`id`, `user_id`, `description`, `is_resolved`, `resolution_note`, `resolved_at`, `resolved_by`, `created_at`).
+- **Strict Privacy Exclusions**: The agent never accesses or queries weekly pulse survey records (`weekly_pulse_responses`), individual pulse ratings, pulse comments, employee profiles, credentials, or protected personal characteristics.
+
+### Soft-Deleted Message Exclusion Policy
+Soft-deleted messages (`is_deleted == true`) are strictly excluded from all queries, candidate sets, evidence references, deterministic metrics, snippets, prompts, and recommendations across all roles (**Employee**, **Manager**, and **Admin**). Retained deleted message content in administrative audits is never exposed to or processed by the agent.
+
+### Role & Team Scoping (Database Pre-Filtering)
+Authorization filters are strictly applied at the database level before documents become candidates:
+- **Employee**: Strictly filtered to active messages and task blockers within the employee's assigned team (`team_id == assigned_team_id`). Cross-team queries are rejected. Unassigned employees receive an empty evidence set.
+- **Manager**: Scoped strictly to messages and task blockers belonging to teams the manager actually manages (`team_id in managed_team_ids`). Unmanaged team queries are rejected. Managers with no managed teams receive an empty evidence set.
+- **Admin**: Read-only organization-wide or requested-team analysis within the authorized collaboration intent boundaries.
+- **Defense-in-Depth**: Retained evidence references undergo secondary team-scope validation prior to formatting.
+
+### Deterministic Python Metrics
+Key collaboration and blocker metrics are calculated deterministically in Python prior to LLM invocation:
+- **Active Messages Count**: Count of active non-deleted messages within the lookback window (default: 30 days).
+- **Distinct Active Participants**: Count of distinct senders in active messages within the lookback window.
+- **Tasks with Active Blockers**: Count of tasks with at least one unresolved blocker or with status `blocked`.
+- **Unresolved Blockers**: Count of active unresolved blockers.
+- **Stale Blockers Count**: Deterministically computed count of unresolved blockers older than 7 UTC days (`now_utc - created_at > 7 days`).
+- **Resolved Blockers Count**: Count of resolved blockers.
+- **Average Resolution Time (Hours)**: Arithmetic mean resolution duration computed strictly when both valid `created_at` and `resolved_at` timestamps exist and `resolved_at >= created_at`.
+- **Invalid Timestamp Count**: Count of malformed or invalid timestamp entries safely excluded from averages.
+
+### Structured Output Contract (`CollaborationFindingOutput`)
+The agent produces a strictly validated, frozen Pydantic model (`extra="forbid"`):
+- `summary`: Concise, factual executive summary of collaboration patterns and blocker state.
+- `communication_observations`: Bulleted list of factual communication patterns and coordination observations.
+- `blocker_observations`: Observations on active, stale, and resolved task blockers.
+- `dependency_risks`: Identified cross-team and technical dependency bottlenecks.
+- `recommended_actions`: Concrete, safe advisory recommendations (clarification, follow-up, documentation, escalation, team discussion).
+- `confidence`: Bounded numeric confidence score (0.0 to 1.0).
+- `limitations`: Explicit disclosures when evidence is sparse, missing, or limited.
+
+### Security, Privacy & Responsible AI Controls
+- **Advisory Only**: Output recommendations are strictly advisory suggestions for teams and managers; autonomous task reassignments or database mutations are prohibited.
+- **No Ranking, Blame, or Punishment**: Strictly forbids employee ranking, blaming individual workers, sentiment scoring of individuals, or recommending disciplinary/punitive actions.
+- **No Medical/Emotional Diagnoses**: Strictly prohibits clinical, mental health, stress, or emotional state inferences.
+- **Untrusted Evidence Boundary**: Collaboration message contents and blocker descriptions are structured into JSON evidence blocks delimited by `=== BEGIN_UNTRUSTED_EVIDENCE_JSON ===`, neutralizing prompt injection attempts.
+- **Explicit Tool Execution**: Canonical tools (`collaboration_message_evidence`, `collaboration_task_blocker_evidence`) are invoked explicitly; invoking the runtime with `tool_names=None` runs zero tools.
+- **Single LLM Gateway Call**: Invokes the shared `LLMGateway` exactly once per execution with bounded timeout and exponential retry handling.
+
+### Offline Testing Strategy
+Comprehensive test suite (`backend/tests/agents/test_collaboration_agent.py`) verifies all features offline without network calls or external credentials:
+- Role/team MongoDB query filtering and pre-query authorization.
+- Soft-deleted message exclusion across Employee, Manager, and Admin roles.
+- Deterministic metric calculations, UTC boundary handling, and stale blocker thresholds.
+- Structured output validation, single-call gateway verification, and sanitized error handling.
+- Responsible AI guardrail enforcement and audit sink log sanitization.
+
+---
+
+## 10. Current Architecture & Session Limitations
 
 1. **In-Memory Session Storage:** JWT access tokens are stored strictly in-memory (React state) to prevent browser storage XSS exposure. Page reloads currently require signing in again.
 2. **Token Lifetime & Refresh:** Access tokens expire in 15 minutes. Refresh tokens and server-side token revocation blocklists are not yet implemented.
 3. **Dynamic Role Verification:** The backend resolves the token subject against the live database record on each request, ensuring role modifications or deactivations take effect immediately.
 4. **Role Scope & Privacy Thresholding:** Weekly pulse surveys provide employee self-submission, manager team aggregates with a strict minimum response threshold of 3 for anonymity, and admin privacy-safe audit metadata. No individual well-being scores, mood/stress classifications, or diagnostic labels are computed or exposed.
-5. **Specialist AI Agents:** The Productivity Specialist Agent is fully implemented on the custom runtime. Other specialist agents (*Collaboration, Wellbeing, Task Assignment*) and the Coordinator Agent will follow on their respective feature branches.
+5. **Specialist AI Agents:** The Productivity Specialist Agent and Collaboration Specialist Agent are fully implemented on the custom runtime. Other specialist agents (*Wellbeing, Task Assignment*) and the Coordinator Agent will follow on their respective feature branches.
