@@ -59,6 +59,27 @@ from backend.app.modules.agents.audit import (
     create_llm_audit_event,
     create_policy_audit_event,
 )
+from backend.app.modules.agents.runtime import (
+    AgentAuthorizationError,
+    AgentCapabilityError,
+    AgentConfigError,
+    AgentDefinition,
+    AgentOutputValidationError,
+    AgentProviderError,
+    AgentRegistrationError,
+    AgentRuntime,
+    AgentRuntimeConfig,
+    AgentRuntimeError,
+    AgentTimeoutError,
+    AgentTool,
+    AgentToolExecutionError,
+    BaseAgentTool,
+    ExecutionContext,
+    FakeAgentRuntime,
+    StructuredAgentFindingOutput,
+    UnknownAgentError,
+    UnknownToolError,
+)
 
 __all__ = [
     # Protocol
@@ -118,4 +139,24 @@ __all__ = [
     "create_authorization_audit_event",
     "create_llm_audit_event",
     "create_policy_audit_event",
+    # Runtime
+    "AgentAuthorizationError",
+    "AgentCapabilityError",
+    "AgentConfigError",
+    "AgentDefinition",
+    "AgentOutputValidationError",
+    "AgentProviderError",
+    "AgentRegistrationError",
+    "AgentRuntime",
+    "AgentRuntimeConfig",
+    "AgentRuntimeError",
+    "AgentTimeoutError",
+    "AgentTool",
+    "AgentToolExecutionError",
+    "BaseAgentTool",
+    "ExecutionContext",
+    "FakeAgentRuntime",
+    "StructuredAgentFindingOutput",
+    "UnknownAgentError",
+    "UnknownToolError",
 ]
