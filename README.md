@@ -13,8 +13,15 @@ Configure a `.env` file inside the `backend/` directory with the following varia
 - `MONGODB_PASSWORD` — Database password
 - `MONGODB_DATABASE` — Database name
 - `JWT_SECRET_KEY` — Cryptographic signing key for HS256 access tokens
-- `LLM_API_KEY` — API key for OpenAI-compatible LLM provider (optional in test environments using `FakeLLMGateway`)
-- `LLM_BASE_URL` — Base URL for LLM provider (defaults to `https://api.openai.com/v1`)
+- `LLM_PROVIDER` — Production LLM provider (`gemini` or `openai_compatible`)
+- `GEMINI_API_KEY` — API key for Google Gemini LLM provider (production fails closed if missing)
+- `GEMINI_MODEL` — Gemini model identifier (e.g., `gemini-3.6-flash`)
+- `GEMINI_TIMEOUT_SECONDS` — Gemini request timeout in seconds (defaults to `30.0`)
+- `GEMINI_MAX_RETRIES` — Gemini max retries for transient errors (defaults to `3`)
+- `GEMINI_TEMPERATURE` — Generation temperature (defaults to `0.2`)
+- `GEMINI_MAX_OUTPUT_TOKENS` — Max output tokens (defaults to `2048`)
+- `LLM_API_KEY` — API key for OpenAI-compatible LLM provider (optional fallback)
+- `LLM_BASE_URL` — Base URL for OpenAI-compatible LLM provider (defaults to `https://api.openai.com/v1`)
 - `LLM_MODEL` — Chat completion model identifier (defaults to `gpt-4o-mini`)
 - `LLM_TIMEOUT_SECONDS` — Request timeout limit in seconds (defaults to `30.0`)
 - `LLM_MAX_RETRIES` — Maximum retry count for transient network/rate-limit errors (defaults to `3`)
@@ -566,7 +573,35 @@ Comprehensive test suite (`backend/tests/agents/test_task_assignment_agent.py`) 
 
 ---
 
-## 12. Current Architecture & Session Limitations
+## 12. Google Gemini LLM Provider Integration
+
+The custom multi-agent runtime integrates with Google Gemini via the official Google Gen AI SDK (`google-genai`).
+
+### Architecture & Production Gateway
+- **`GeminiLLMGateway`**: Implements the `LLMGateway` interface (`generate_structured`), providing asynchronous structured JSON responses mapped to strict Pydantic schemas.
+- **Fail-Closed Provider Factory**: `create_production_llm_gateway()` strictly fails closed. If `LLM_PROVIDER=gemini` is configured without `GEMINI_API_KEY` or `GEMINI_MODEL`, a configuration error is raised. Production application code never silently falls back to `FakeLLMGateway`.
+- **Test Doubles**: `FakeLLMGateway` is available strictly as an explicitly injected test double for offline automated test suites.
+- **Error Mapping & Resilience**: Google GenAI errors are mapped to typed repository exceptions (`LLMAuthenticationError`, `LLMRequestError`, `LLMUnavailableError`, `LLMTimeoutError`, `LLMResponseValidationError`). Retries with exponential backoff are bounded to transient errors (HTTP 429 rate limits, 5xx server errors, network timeouts) and never applied to authentication or schema validation failures.
+- **Privacy & Safety**: Prompts and raw responses are never logged. API keys are strictly redacted from `repr()`, exceptions, audit events, and log streams.
+
+### Manual Synthetic Smoke Test
+A standalone manual smoke test script verifies live Gemini API connectivity across all four specialist agent Pydantic response schemas using strictly synthetic data:
+```powershell
+python backend/scripts/smoke_test_gemini.py --agent productivity
+python backend/scripts/smoke_test_gemini.py --agent collaboration
+python backend/scripts/smoke_test_gemini.py --agent wellbeing
+python backend/scripts/smoke_test_gemini.py --agent task_assignment
+```
+
+> [!IMPORTANT]
+> **Synthetic Data & Privacy Policy:**
+> - The manual smoke test uses purely fictional, synthetic prompt data.
+> - Real employee names, task records, collaboration messages, weekly pulse survey responses, or database credentials must NEVER be transmitted during smoke testing.
+> - Configured model: `gemini-3.1-flash-lite` (Flash-class stable model for low-cost structured outputs).
+
+---
+
+## 13. Current Architecture & Session Limitations
 
 1. **In-Memory Session Storage:** JWT access tokens are stored strictly in-memory (React state) to prevent browser storage XSS exposure. Page reloads currently require signing in again.
 2. **Token Lifetime & Refresh:** Access tokens expire in 15 minutes. Refresh tokens and server-side token revocation blocklists are not yet implemented.

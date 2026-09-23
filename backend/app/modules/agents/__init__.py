@@ -18,7 +18,9 @@ from backend.app.modules.agents.protocol import (
     format_evidence_for_prompt,
 )
 from backend.app.modules.agents.llm_gateway import (
+    DEFAULT_GEMINI_MODEL,
     FakeLLMGateway,
+    GeminiLLMGateway,
     LLMAuthenticationError,
     LLMConfigurationError,
     LLMError,
@@ -30,6 +32,7 @@ from backend.app.modules.agents.llm_gateway import (
     LLMUnavailableError,
     LLMUsage,
     OpenAICompatibleLLMGateway,
+    create_production_llm_gateway,
 )
 from backend.app.modules.agents.security_policy import (
     AGENT_ALLOWED_EVIDENCE_SOURCES,
@@ -170,7 +173,9 @@ __all__ = [
     "create_agent_response",
     "format_evidence_for_prompt",
     # Gateway
+    "DEFAULT_GEMINI_MODEL",
     "FakeLLMGateway",
+    "GeminiLLMGateway",
     "LLMAuthenticationError",
     "LLMConfigurationError",
     "LLMError",
@@ -182,6 +187,7 @@ __all__ = [
     "LLMUnavailableError",
     "LLMUsage",
     "OpenAICompatibleLLMGateway",
+    "create_production_llm_gateway",
     # Security Policy
     "AGENT_ALLOWED_EVIDENCE_SOURCES",
     "AGENT_ALLOWED_INTENTS",
