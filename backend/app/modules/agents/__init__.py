@@ -44,6 +44,7 @@ from backend.app.modules.agents.security_policy import (
     AuthorizationDecision,
     PrincipalRole,
     authorize_user_intent,
+    get_allowed_intents_for_role,
     validate_agent_capability,
     validate_dependency_flow,
     validate_evidence_team_scope,
@@ -164,8 +165,31 @@ from backend.app.modules.agents.coordinator import (
     create_production_coordinator,
     register_coordinator_agent,
 )
+from backend.app.modules.agents.router import (
+    AgentCapabilitiesResponse,
+    AgentExecuteRequest,
+    AgentExecuteResponse,
+    IntentCapabilityInfo,
+    SafeExecutionError,
+    SpecialistCapabilityInfo,
+    SpecialistFindingItem,
+    get_agent_coordinator,
+    resolve_authenticated_principal,
+    router as agents_router,
+)
 
 __all__ = [
+    # Router & API
+    "agents_router",
+    "AgentExecuteRequest",
+    "AgentExecuteResponse",
+    "AgentCapabilitiesResponse",
+    "IntentCapabilityInfo",
+    "SpecialistCapabilityInfo",
+    "SpecialistFindingItem",
+    "SafeExecutionError",
+    "get_agent_coordinator",
+    "resolve_authenticated_principal",
     # Coordinator
     "COORDINATOR_AGENT_NAME",
     "COORDINATOR_SYSTEM_PROMPT",
@@ -221,6 +245,7 @@ __all__ = [
     "AuthorizationDecision",
     "PrincipalRole",
     "authorize_user_intent",
+    "get_allowed_intents_for_role",
     "validate_agent_capability",
     "validate_dependency_flow",
     "validate_evidence_team_scope",

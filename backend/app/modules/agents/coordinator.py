@@ -154,6 +154,7 @@ class CoordinatorExecutionRequest(BaseModel):
         str,
         StringConstraints(strip_whitespace=True, max_length=64),
     ] | None = None
+    weeks_lookback: Annotated[int, Field(ge=1, le=12)] | None = None
     evidence_refs: list[EvidenceReference] = Field(
         default_factory=list,
         max_length=50,
