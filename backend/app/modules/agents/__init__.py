@@ -152,8 +152,31 @@ from backend.app.modules.agents.task_assignment import (
     register_task_assignment_agent,
     validate_task_assignment_grounding,
 )
+from backend.app.modules.agents.coordinator import (
+    COORDINATOR_AGENT_NAME,
+    COORDINATOR_SYSTEM_PROMPT,
+    DEFAULT_COORDINATOR_TIMEOUT_SECONDS,
+    INTENT_SPECIALIST_ROUTING,
+    AgentCoordinator,
+    CoordinatorExecutionRequest,
+    CoordinatorExecutionResult,
+    create_coordinator_agent_definition,
+    create_production_coordinator,
+    register_coordinator_agent,
+)
 
 __all__ = [
+    # Coordinator
+    "COORDINATOR_AGENT_NAME",
+    "COORDINATOR_SYSTEM_PROMPT",
+    "DEFAULT_COORDINATOR_TIMEOUT_SECONDS",
+    "INTENT_SPECIALIST_ROUTING",
+    "AgentCoordinator",
+    "CoordinatorExecutionRequest",
+    "CoordinatorExecutionResult",
+    "create_coordinator_agent_definition",
+    "create_production_coordinator",
+    "register_coordinator_agent",
     # Protocol
     "BEGIN_UNTRUSTED_EVIDENCE_JSON",
     "END_UNTRUSTED_EVIDENCE_JSON",

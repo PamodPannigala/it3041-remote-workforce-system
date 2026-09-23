@@ -601,10 +601,67 @@ python backend/scripts/smoke_test_gemini.py --agent task_assignment
 
 ---
 
-## 13. Current Architecture & Session Limitations
+## 13. Coordinator / Orchestrator Agent
+
+The system implements the **Central Coordinator / Orchestrator Agent** (`AgentCoordinator`) on top of the custom Python multi-agent runtime.
+
+### Purpose & Architecture
+The Coordinator acts as the single orchestration interface for multi-agent workflows, managing intent routing, concurrency, dependency validation, Responsible AI guardrails, bounded resilience, and multi-specialist synthesis:
+- **Declarative Intent Routing**: Automatically routes supported workplace inquiries (`AgentIntent`) to appropriate specialist agents (`Productivity`, `Collaboration`, `Well-being`, `Task Assignment`).
+- **Concurrent Execution**: Executes independent specialist agents concurrently using bounded concurrency controls (`asyncio.gather`), optimizing response latency for multi-domain inquiries.
+- **Dependency Ordering & Provenance**: Validates prerequisite findings before passing them to downstream dependent agents, ensuring correlation ID matching, provenance integrity, and Responsible AI compliance.
+- **Strict Well-being Isolation**: Strictly enforces complete isolation of Well-being pulse data from Task Assignment recommendations across all routing, dependency, and synthesis layers.
+- **Partial Failure Resilience**: When one independent specialist fails during multi-agent orchestration, the coordinator returns partial safe results (`status="partial"`) alongside sanitized error codes, preventing total pipeline collapse.
+- **Executive Synthesis & Fallback**: Consolidates multi-agent findings into a cohesive, balanced executive analysis (`StructuredAgentFindingOutput`), with deterministic fallback if LLM synthesis is unavailable.
+- **Advisory Only**: Operates strictly read-only with zero database mutations or automatic task reassignments.
+- **Privacy-Safe Audit Logging**: Records structured audit events without ever leaking prompt bodies, raw employee records, pulse survey comments, PII, or credentials.
+
+### Intent Routing & Specialist Matrix
+| Intent (`AgentIntent`) | Target Specialist(s) | Execution Mode | Synthesis |
+| :--- | :--- | :--- | :--- |
+| `productivity_analysis` | `productivity` | Single Direct | Direct Specialist Finding |
+| `collaboration_analysis` | `collaboration` | Single Direct | Direct Specialist Finding |
+| `wellbeing_analysis` | `wellbeing` | Single Direct | Direct Specialist Finding |
+| `task_assignment_recommendation` | `task_assigning` | Single / Prerequisite Flow | Direct Specialist Finding (Well-being strictly blocked) |
+| `task_delay_analysis` | `productivity`, `collaboration` | Concurrent Multi-Agent | Synthesized Executive Finding + Specialist Findings |
+| `team_workload_analysis` | `productivity`, `wellbeing` | Concurrent Multi-Agent | Synthesized Executive Finding + Specialist Findings |
+| `general_workforce_question` | `productivity`, `collaboration`, `wellbeing` | Concurrent Multi-Agent | Synthesized Executive Finding + Specialist Findings |
+
+### Usage Example
+```python
+from backend.app.modules.agents import (
+    create_production_coordinator,
+    CoordinatorExecutionRequest,
+    AuthenticatedPrincipal,
+)
+
+# Initialize production coordinator with all registered specialists
+coordinator = create_production_coordinator(database=db)
+
+# Execute an orchestrated inquiry
+request = CoordinatorExecutionRequest(
+    correlation_id=str(uuid.uuid4()),
+    intent="task_delay_analysis",
+    authenticated_principal=current_manager_principal,
+    question="What factors are contributing to sprint delays?",
+    target_team_id="team-alpha",
+)
+result = await coordinator.orchestrate(request)
+
+# Process findings
+print(f"Status: {result.status}")
+if result.synthesized_finding:
+    print(f"Executive Summary: {result.synthesized_finding.summary}")
+for finding in result.findings:
+    print(f"- [{finding.agent.upper()}]: {finding.summary}")
+```
+
+---
+
+## 14. Current Architecture & Session Limitations
 
 1. **In-Memory Session Storage:** JWT access tokens are stored strictly in-memory (React state) to prevent browser storage XSS exposure. Page reloads currently require signing in again.
 2. **Token Lifetime & Refresh:** Access tokens expire in 15 minutes. Refresh tokens and server-side token revocation blocklists are not yet implemented.
 3. **Dynamic Role Verification:** The backend resolves the token subject against the live database record on each request, ensuring role modifications or deactivations take effect immediately.
 4. **Role Scope & Privacy Thresholding:** Weekly pulse surveys provide employee self-submission, manager team aggregates with a strict minimum response threshold of 3 for anonymity, and admin privacy-safe audit metadata. No individual well-being scores, mood/stress classifications, or diagnostic labels are computed or exposed.
-5. **Specialist AI Agents:** The Productivity Specialist Agent, Collaboration Specialist Agent, Well-being Specialist Agent, and Task Assignment Specialist Agent are fully implemented on the custom runtime. The Coordinator Agent will follow on its dedicated feature branch.
+5. **Multi-Agent Runtime & Specialists:** The Central Coordinator Agent, Productivity Specialist Agent, Collaboration Specialist Agent, Well-being Specialist Agent, and Task Assignment Specialist Agent are fully implemented, tested, and integrated with the production LLM gateway.
