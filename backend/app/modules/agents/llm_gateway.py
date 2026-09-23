@@ -9,17 +9,35 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel, ValidationError
 
+try:
+    from google import genai
+    from google.genai import errors as genai_errors, types as genai_types
+    GENAI_AVAILABLE = True
+except ImportError:
+    genai = None  # type: ignore
+    genai_errors = None  # type: ignore
+    genai_types = None  # type: ignore
+    GENAI_AVAILABLE = False
+
 logger = logging.getLogger("remote_workforce.agents.llm_gateway")
 
 T = TypeVar("T", bound=BaseModel)
 
 MAX_PROMPT_CHARS = 50_000
+MAX_OUTPUT_CHARS = 50_000
 DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAX_RETRIES = 3
 MIN_TIMEOUT_SECONDS = 1.0
 MAX_TIMEOUT_SECONDS = 300.0
 MIN_MAX_RETRIES = 0
 MAX_MAX_RETRIES = 5
+DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
+DEFAULT_TEMPERATURE = 0.2
+MIN_TEMPERATURE = 0.0
+MAX_TEMPERATURE = 2.0
+DEFAULT_MAX_OUTPUT_TOKENS = 2048
+MIN_MAX_OUTPUT_TOKENS = 1
+MAX_MAX_OUTPUT_TOKENS = 8192
 
 
 class LLMError(Exception):
@@ -356,6 +374,522 @@ class OpenAICompatibleLLMGateway(LLMGateway):
             usage=usage,
             request_id=request_id,
         )
+
+
+def _clean_gemini_schema(schema: Any) -> Any:
+    """
+    Recursively strips attributes incompatible with the Gemini Developer API schema parser.
+    Preserves supported keywords: title, description, minimum, maximum, min_items (minItems),
+    max_items (maxItems), min_length (minLength), max_length (maxLength), nullable, format,
+    enum, required, properties, and items.
+    Removes:
+    1. additional_properties / additionalProperties (causes HTTP 400 Unknown name "additional_properties").
+    2. min_items / max_items on arrays of nested objects (causes HTTP 400 Request contains an invalid argument).
+    """
+    if isinstance(schema, dict):
+        schema.pop("additionalProperties", None)
+        schema.pop("additional_properties", None)
+        if schema.get("type") in ("array", "ARRAY"):
+            items = schema.get("items")
+            if isinstance(items, dict) and (items.get("type") in ("object", "OBJECT") or "properties" in items):
+                schema.pop("maxItems", None)
+                schema.pop("minItems", None)
+                schema.pop("max_items", None)
+                schema.pop("min_items", None)
+        if "properties" in schema and isinstance(schema["properties"], dict):
+            for prop in schema["properties"].values():
+                _clean_gemini_schema(prop)
+        if "items" in schema:
+            _clean_gemini_schema(schema["items"])
+        if "anyOf" in schema and isinstance(schema["anyOf"], list):
+            for item in schema["anyOf"]:
+                _clean_gemini_schema(item)
+        return schema
+
+    if not isinstance(schema, genai_types.Schema):
+        return schema
+
+    if hasattr(schema, "additional_properties"):
+        schema.additional_properties = None
+
+    # Strip min_items / max_items if array items are nested objects (incompatible in Gemini Developer API)
+    if getattr(schema, "type", None) == genai_types.Type.ARRAY and schema.items is not None:
+        if getattr(schema.items, "type", None) == genai_types.Type.OBJECT or getattr(schema.items, "properties", None):
+            if hasattr(schema, "max_items"):
+                schema.max_items = None
+            if hasattr(schema, "min_items"):
+                schema.min_items = None
+
+    if schema.properties:
+        for prop in schema.properties.values():
+            _clean_gemini_schema(prop)
+    if schema.items:
+        _clean_gemini_schema(schema.items)
+    if schema.any_of:
+        for item in schema.any_of:
+            _clean_gemini_schema(item)
+    return schema
+
+
+def _prepare_response_schema(response_model: type[BaseModel] | Any) -> Any:
+    """Prepares a Pydantic model into a clean Gemini types.Schema for generate_content."""
+    if not GENAI_AVAILABLE or genai_types is None:
+        return response_model
+    try:
+        from google.genai import _transformers
+        schema = _transformers.t_schema(None, response_model)
+        return _clean_gemini_schema(schema)
+    except Exception:
+        return response_model
+
+
+class GeminiLLMGateway(LLMGateway):
+    """
+    Production asynchronous gateway for Google Gemini models using the official google-genai SDK.
+    Enforces strict timeouts, transient-only retries, structured JSON schema outputs, and Pydantic validation.
+    """
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str | None = None,
+        timeout_seconds: float | None = None,
+        max_retries: int | None = None,
+        temperature: float | None = None,
+        max_output_tokens: int | None = None,
+        client: Any | None = None,
+        backoff_factor: float = 0.5,
+    ):
+        if not GENAI_AVAILABLE:
+            raise LLMConfigurationError(
+                "The google-genai package is required to use GeminiLLMGateway. Install with 'pip install google-genai'."
+            )
+
+        # 1. Validate API Key
+        raw_key = (
+            api_key
+            if api_key is not None
+            else (os.getenv("GEMINI_API_KEY") or os.getenv("LLM_API_KEY", ""))
+        )
+        self._api_key = str(raw_key).strip()
+        if not self._api_key:
+            raise LLMConfigurationError(
+                "Missing required LLM configuration: GEMINI_API_KEY is not set"
+            )
+
+        # 2. Validate Model
+        raw_model = (
+            model
+            if model is not None
+            else (os.getenv("GEMINI_MODEL") or os.getenv("LLM_MODEL", DEFAULT_GEMINI_MODEL))
+        )
+        self.model = str(raw_model).strip()
+        if not self.model or len(self.model) > 100:
+            raise LLMConfigurationError(
+                "Invalid LLM configuration: GEMINI_MODEL must be a non-empty string up to 100 characters"
+            )
+
+        # 3. Validate Timeout Seconds
+        raw_timeout = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else (os.getenv("GEMINI_TIMEOUT_SECONDS") or os.getenv("LLM_TIMEOUT_SECONDS"))
+        )
+        if raw_timeout is not None:
+            try:
+                parsed_timeout = float(raw_timeout)
+                if not (MIN_TIMEOUT_SECONDS <= parsed_timeout <= MAX_TIMEOUT_SECONDS):
+                    raise LLMConfigurationError(
+                        f"Invalid LLM configuration: GEMINI_TIMEOUT_SECONDS must be between {MIN_TIMEOUT_SECONDS} and {MAX_TIMEOUT_SECONDS}"
+                    )
+                self.timeout_seconds = parsed_timeout
+            except (ValueError, TypeError):
+                raise LLMConfigurationError(
+                    f"Invalid LLM configuration: GEMINI_TIMEOUT_SECONDS must be a numeric value between {MIN_TIMEOUT_SECONDS} and {MAX_TIMEOUT_SECONDS}"
+                ) from None
+        else:
+            self.timeout_seconds = DEFAULT_TIMEOUT_SECONDS
+
+        # 4. Validate Max Retries
+        raw_retries = (
+            max_retries
+            if max_retries is not None
+            else (os.getenv("GEMINI_MAX_RETRIES") or os.getenv("LLM_MAX_RETRIES"))
+        )
+        if raw_retries is not None:
+            try:
+                parsed_retries = int(raw_retries)
+                if not (MIN_MAX_RETRIES <= parsed_retries <= MAX_MAX_RETRIES):
+                    raise LLMConfigurationError(
+                        f"Invalid LLM configuration: GEMINI_MAX_RETRIES must be an integer between {MIN_MAX_RETRIES} and {MAX_MAX_RETRIES}"
+                    )
+                self.max_retries = parsed_retries
+            except (ValueError, TypeError):
+                raise LLMConfigurationError(
+                    f"Invalid LLM configuration: GEMINI_MAX_RETRIES must be an integer between {MIN_MAX_RETRIES} and {MAX_MAX_RETRIES}"
+                ) from None
+        else:
+            self.max_retries = DEFAULT_MAX_RETRIES
+
+        # 5. Validate Temperature
+        raw_temp = (
+            temperature
+            if temperature is not None
+            else (os.getenv("GEMINI_TEMPERATURE") or os.getenv("LLM_TEMPERATURE"))
+        )
+        if raw_temp is not None:
+            try:
+                parsed_temp = float(raw_temp)
+                if not (MIN_TEMPERATURE <= parsed_temp <= MAX_TEMPERATURE):
+                    raise LLMConfigurationError(
+                        f"Invalid LLM configuration: GEMINI_TEMPERATURE must be between {MIN_TEMPERATURE} and {MAX_TEMPERATURE}"
+                    )
+                self.temperature = parsed_temp
+            except (ValueError, TypeError):
+                raise LLMConfigurationError(
+                    f"Invalid LLM configuration: GEMINI_TEMPERATURE must be a numeric value between {MIN_TEMPERATURE} and {MAX_TEMPERATURE}"
+                ) from None
+        else:
+            self.temperature = DEFAULT_TEMPERATURE
+
+        # 6. Validate Max Output Tokens
+        raw_max_tokens = (
+            max_output_tokens
+            if max_output_tokens is not None
+            else (os.getenv("GEMINI_MAX_OUTPUT_TOKENS") or os.getenv("LLM_MAX_OUTPUT_TOKENS"))
+        )
+        if raw_max_tokens is not None:
+            try:
+                parsed_max_tokens = int(raw_max_tokens)
+                if not (MIN_MAX_OUTPUT_TOKENS <= parsed_max_tokens <= MAX_MAX_OUTPUT_TOKENS):
+                    raise LLMConfigurationError(
+                        f"Invalid LLM configuration: GEMINI_MAX_OUTPUT_TOKENS must be an integer between {MIN_MAX_OUTPUT_TOKENS} and {MAX_MAX_OUTPUT_TOKENS}"
+                    )
+                self.max_output_tokens = parsed_max_tokens
+            except (ValueError, TypeError):
+                raise LLMConfigurationError(
+                    f"Invalid LLM configuration: GEMINI_MAX_OUTPUT_TOKENS must be an integer between {MIN_MAX_OUTPUT_TOKENS} and {MAX_MAX_OUTPUT_TOKENS}"
+                ) from None
+        else:
+            self.max_output_tokens = DEFAULT_MAX_OUTPUT_TOKENS
+
+        self._custom_client = client
+        self._backoff_factor = max(float(backoff_factor), 0.0)
+        self._client: Any = client if client is not None else None
+
+    def _get_client(self) -> Any:
+        if self._client is None:
+            self._client = genai.Client(api_key=self._api_key)
+        return self._client
+
+    async def aclose(self) -> None:
+        """Close the underlying client resources if instantiated."""
+        if self._client is not None and self._custom_client is None:
+            aio_client = getattr(self._client, "aio", None)
+            if aio_client is not None:
+                if hasattr(aio_client, "aclose") and callable(aio_client.aclose):
+                    await aio_client.aclose()
+            self._client = None
+
+    def __repr__(self) -> str:
+        return f"GeminiLLMGateway(model={self.model!r})"
+
+    def __str__(self) -> str:
+        return f"GeminiLLMGateway(model={self.model!r})"
+
+    async def generate_structured(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        response_model: type[T],
+        correlation_id: str,
+    ) -> LLMResult[T]:
+        # Enforce prompt size limits to mitigate resource exhaustion
+        if len(system_prompt) > MAX_PROMPT_CHARS or len(user_prompt) > MAX_PROMPT_CHARS:
+            raise LLMRequestError(
+                f"Prompt length exceeds maximum allowed limit of {MAX_PROMPT_CHARS} characters"
+            )
+
+        # Enforce ONE overall deadline for all attempts and backoffs
+        try:
+            return await asyncio.wait_for(
+                self._execute_with_retries(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    response_model=response_model,
+                    correlation_id=correlation_id,
+                ),
+                timeout=self.timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            raise LLMTimeoutError(
+                f"Gemini provider request exceeded overall timeout limit of {self.timeout_seconds}s"
+            ) from None
+
+    async def _execute_with_retries(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        response_model: type[T],
+        correlation_id: str,
+    ) -> LLMResult[T]:
+        prepared_schema = _prepare_response_schema(response_model)
+        config = genai_types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            temperature=self.temperature,
+            max_output_tokens=self.max_output_tokens,
+            response_mime_type="application/json",
+            response_schema=prepared_schema,
+            automatic_function_calling=genai_types.AutomaticFunctionCallingConfig(disable=True),
+        )
+
+        # Safe logging with correlation_id and model only; prompts and API keys are strictly forbidden
+        logger.info(
+            "Executing structured Gemini LLM request for correlation_id=%s model=%s",
+            correlation_id,
+            self.model,
+        )
+
+        attempts = 0
+        last_error: Exception | None = None
+        client = self._get_client()
+
+        while attempts <= self.max_retries:
+            attempts += 1
+            try:
+                response = await client.aio.models.generate_content(
+                    model=self.model,
+                    contents=user_prompt,
+                    config=config,
+                )
+                return self._parse_and_validate(response, response_model, correlation_id)
+
+            except asyncio.CancelledError:
+                # Task cancellation must always propagate immediately
+                raise
+
+            except (genai_errors.ClientError, genai_errors.APIError) as exc:
+                status_code = getattr(exc, "code", None)
+                if status_code in (401, 403):
+                    # Authentication/permission failure: never retry
+                    raise LLMAuthenticationError(
+                        f"Gemini authentication failed with HTTP {status_code}"
+                    ) from None
+
+                if status_code in (400, 404, 422):
+                    # Client request failure: never retry
+                    raise LLMRequestError(
+                        f"Gemini provider rejected request with HTTP {status_code}"
+                    ) from None
+
+                if status_code == 429:
+                    # Rate limiting / quota exceeded: transient failure
+                    last_error = LLMUnavailableError(
+                        "Gemini rate limit or quota exceeded (HTTP 429)"
+                    )
+                    if attempts <= self.max_retries:
+                        await self._backoff(attempts)
+                        continue
+                    raise last_error from None
+
+                if isinstance(exc, genai_errors.ServerError) or (status_code and status_code >= 500):
+                    # Server error: transient failure
+                    last_error = LLMUnavailableError(
+                        f"Gemini server error (HTTP {status_code})"
+                    )
+                    if attempts <= self.max_retries:
+                        await self._backoff(attempts)
+                        continue
+                    raise last_error from None
+
+                last_error = LLMUnavailableError(
+                    f"Gemini API error (HTTP {status_code})"
+                )
+                if attempts <= self.max_retries:
+                    await self._backoff(attempts)
+                    continue
+                raise last_error from None
+
+            except (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException):
+                last_error = LLMTimeoutError("Gemini provider request timed out")
+                if attempts <= self.max_retries:
+                    await self._backoff(attempts)
+                    continue
+                raise last_error from None
+
+            except (httpx.TransportError, ConnectionError):
+                last_error = LLMUnavailableError("Gemini provider network transport error")
+                if attempts <= self.max_retries:
+                    await self._backoff(attempts)
+                    continue
+                raise last_error from None
+
+            except LLMResponseValidationError:
+                # Output parsing/validation error: never retry
+                raise
+
+            except Exception as exc:
+                err_str = str(exc).lower()
+                if "429" in err_str or "quota" in err_str or "resource_exhausted" in err_str:
+                    last_error = LLMUnavailableError("Gemini rate limit or quota exceeded")
+                    if attempts <= self.max_retries:
+                        await self._backoff(attempts)
+                        continue
+                    raise last_error from None
+                if "401" in err_str or "403" in err_str or "permission" in err_str or "unauthenticated" in err_str:
+                    raise LLMAuthenticationError("Gemini authentication failed") from None
+
+                last_error = LLMUnavailableError(f"Gemini provider error: {type(exc).__name__}")
+                if attempts <= self.max_retries:
+                    await self._backoff(attempts)
+                    continue
+                raise last_error from None
+
+        if last_error:
+            raise last_error
+        raise LLMUnavailableError("Gemini provider unavailable after retries")
+
+    async def _backoff(self, attempt: int) -> None:
+        if self._backoff_factor > 0:
+            delay = self._backoff_factor * (2 ** (attempt - 1))
+            await asyncio.sleep(delay)
+
+    def _parse_and_validate(
+        self,
+        response: Any,
+        response_model: type[T],
+        correlation_id: str,
+    ) -> LLMResult[T]:
+        if response is None:
+            raise LLMResponseValidationError("Gemini response is None")
+
+        # 1. Inspect candidates and finish reason
+        candidates = getattr(response, "candidates", None)
+        if not candidates or len(candidates) == 0:
+            prompt_feedback = getattr(response, "prompt_feedback", None)
+            block_reason = getattr(prompt_feedback, "block_reason", None) if prompt_feedback else None
+            if block_reason:
+                raise LLMResponseValidationError(f"Gemini request was blocked by prompt safety filter ({block_reason})")
+            raise LLMResponseValidationError("Gemini response returned no candidates")
+
+        candidate = candidates[0]
+        finish_reason = getattr(candidate, "finish_reason", None)
+        finish_reason_str = str(finish_reason).upper() if finish_reason else ""
+        if any(
+            blocked in finish_reason_str
+            for blocked in ("SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED", "SPII")
+        ):
+            raise LLMResponseValidationError(
+                f"Gemini response was blocked by safety policy (finish_reason: {finish_reason})"
+            )
+
+        # 2. Extract structured output
+        validated_model: T
+        parsed = getattr(response, "parsed", None)
+        if parsed is not None:
+            if isinstance(parsed, response_model):
+                validated_model = parsed
+            elif isinstance(parsed, BaseModel):
+                try:
+                    validated_model = response_model.model_validate(parsed.model_dump())
+                except ValidationError:
+                    raise LLMResponseValidationError("Gemini parsed response failed Pydantic schema validation") from None
+            elif isinstance(parsed, dict):
+                try:
+                    validated_model = response_model.model_validate(parsed)
+                except ValidationError:
+                    raise LLMResponseValidationError("Gemini parsed response failed Pydantic schema validation") from None
+            else:
+                try:
+                    validated_model = response_model.model_validate(parsed)
+                except ValidationError:
+                    raise LLMResponseValidationError("Gemini parsed response failed Pydantic schema validation") from None
+        else:
+            text = getattr(response, "text", None)
+            if text is None or not str(text).strip():
+                raise LLMResponseValidationError("Gemini response missing text content")
+
+            text_str = str(text).strip()
+            if len(text_str) > MAX_OUTPUT_CHARS:
+                raise LLMResponseValidationError(
+                    f"Gemini response length ({len(text_str)}) exceeds maximum allowed limit of {MAX_OUTPUT_CHARS} characters"
+                )
+
+            try:
+                parsed_json = json.loads(text_str)
+            except (json.JSONDecodeError, TypeError):
+                raise LLMResponseValidationError("Gemini output is not valid JSON") from None
+
+            try:
+                validated_model = response_model.model_validate(parsed_json)
+            except ValidationError:
+                raise LLMResponseValidationError("Gemini response failed Pydantic schema validation") from None
+
+        # 3. Extract token usage metadata safely
+        usage: LLMUsage | None = None
+        usage_meta = getattr(response, "usage_metadata", None)
+        if usage_meta is not None:
+            try:
+                p_tok = int(getattr(usage_meta, "prompt_token_count", 0) or 0)
+                c_tok = int(getattr(usage_meta, "candidates_token_count", 0) or 0)
+                t_tok = int(getattr(usage_meta, "total_token_count", 0) or (p_tok + c_tok))
+                usage = LLMUsage(
+                    prompt_tokens=p_tok,
+                    completion_tokens=c_tok,
+                    total_tokens=t_tok,
+                )
+            except (ValueError, TypeError):
+                usage = None
+
+        request_id = getattr(response, "response_id", None)
+        if request_id is not None:
+            request_id = str(request_id)
+
+        return LLMResult(
+            content=validated_model,
+            model=self.model,
+            usage=usage,
+            request_id=request_id,
+        )
+
+
+def create_production_llm_gateway(provider: str | None = None) -> LLMGateway:
+    """
+    Factory function to create production LLM gateways based on environment configuration.
+    Strictly fails closed: never silently falls back to FakeLLMGateway.
+    FakeLLMGateway is only available as an explicitly injected test double.
+    """
+    selected_provider = (
+        provider
+        if provider is not None
+        else (os.getenv("LLM_PROVIDER") or "")
+    ).strip().lower()
+
+    if selected_provider == "gemini":
+        return GeminiLLMGateway()
+
+    if selected_provider in ("openai", "openai_compatible"):
+        return OpenAICompatibleLLMGateway()
+
+    if not selected_provider:
+        if os.getenv("GEMINI_API_KEY"):
+            return GeminiLLMGateway()
+        if os.getenv("LLM_API_KEY"):
+            return OpenAICompatibleLLMGateway()
+        raise LLMConfigurationError(
+            "Missing required LLM configuration: LLM_PROVIDER is not set and no valid API key was found"
+        )
+
+    if selected_provider == "fake":
+        raise LLMConfigurationError(
+            "FakeLLMGateway cannot be selected by production configuration; it is strictly an offline test double"
+        )
+
+    raise LLMConfigurationError(
+        f"Unsupported LLM provider: '{selected_provider}'. Supported providers are: 'gemini', 'openai_compatible'"
+    )
 
 
 class FakeLLMGateway(LLMGateway):
