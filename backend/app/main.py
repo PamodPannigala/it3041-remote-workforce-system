@@ -24,6 +24,9 @@ from backend.app.modules.pulse_surveys.router import (
 from backend.app.modules.information_retrieval.router import (
     router as information_retrieval_router,
 )
+from backend.app.modules.agents.router import router as agents_router
+from backend.app.modules.agents.coordinator import create_production_coordinator
+from backend.app.modules.agents.llm_gateway import LLMConfigurationError
 
 
 
@@ -67,8 +70,27 @@ async def lifespan(app: FastAPI):
         app.state.database = database
         print("MongoDB connected")
 
+        # Initialize shared Agent Coordinator after database connection
+        try:
+            app.state.agent_coordinator = create_production_coordinator(database=database)
+            print("Agent coordinator initialized")
+        except LLMConfigurationError as e:
+            logger.warning("LLM service not configured at startup: %s", e)
+            app.state.agent_coordinator = None
+        except Exception as e:
+            logger.warning("Failed to initialize AgentCoordinator at startup: %s", e)
+            app.state.agent_coordinator = None
+
         yield
     finally:
+        coord = getattr(app.state, "agent_coordinator", None)
+        if coord is not None:
+            app.state.agent_coordinator = None
+            if hasattr(coord, "llm_gateway") and hasattr(coord.llm_gateway, "aclose"):
+                try:
+                    await coord.llm_gateway.aclose()
+                except Exception:
+                    pass
         await client.close()
 
 
@@ -111,6 +133,7 @@ app.include_router(tasks_router)
 app.include_router(collaboration_router)
 app.include_router(pulse_surveys_router)
 app.include_router(information_retrieval_router)
+app.include_router(agents_router)
 
 
 

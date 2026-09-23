@@ -113,6 +113,8 @@ npm run build
 | `/admin/pulse-surveys` | `GET` | `admin` | Audit pulse survey submission metadata (privacy-safe, read-only) |
 | `/admin/pulse-surveys/summary` | `GET` | `admin` | Organization-wide per-team pulse summaries with privacy thresholding |
 | `/api/search` | `GET` | Authenticated (`employee`, `manager`, `admin`) | Lexical Information Retrieval with BM25 ranking and pre-ranking RBAC |
+| `/agents/execute` | `POST` | Authenticated (`employee`, `manager`, `admin`) | Secure execution of multi-agent workflows with server-side authorization |
+| `/agents/capabilities` | `GET` | Authenticated (`employee`, `manager`, `admin`) | Role-filtered capabilities, supported intents, and advisory limitations |
 
 ### JSON Login Request Example
 ```json
@@ -658,10 +660,69 @@ for finding in result.findings:
 
 ---
 
-## 14. Current Architecture & Session Limitations
+## 14. Multi-Agent Production API
+
+The system exposes secure, authenticated FastAPI endpoints under the `/agents` router for executing multi-agent workflows and querying role-scoped agent capabilities.
+
+### Endpoints
+
+#### 1. Execute Multi-Agent Workflow
+- **Method & Route**: `POST /agents/execute`
+- **Authentication**: Required (`Bearer <JWT>`)
+- **Request Schema (`AgentExecuteRequest`)**:
+  - `intent`: One of `productivity_analysis`, `collaboration_analysis`, `wellbeing_analysis`, `task_assignment_recommendation`, `task_delay_analysis`, `team_workload_analysis`, `general_workforce_question`
+  - `question`: Non-empty string (1–2000 chars)
+  - `target_team_id`: Optional team ID string (max 64 chars)
+  - `target_task_id`: Optional task ID string (max 64 chars)
+  - `weeks_lookback`: Optional integer lookback window (1–52)
+  - `conversation_id`: Optional conversation identifier (max 64 chars)
+  - `correlation_id`: Optional valid UUID string
+  - *Strict Validation*: Enforces `extra="forbid"`. Client-supplied roles, team scopes, user IDs, or dependency findings are strictly rejected (HTTP 422).
+- **Response Schema (`AgentExecuteResponse`)**:
+  - `correlation_id`: Traceable execution UUID
+  - `intent`: Executed agent intent
+  - `status`: Execution status (`completed`, `partial`, `failed`)
+  - `summary`: Consolidated primary or synthesized executive summary
+  - `confidence`: Bounded numeric confidence score ($0.0 \le c \le 1.0$)
+  - `findings`: List of sanitized specialist findings (`SpecialistFindingItem`)
+  - `limitations`: Advisory constraints and evidence limitations
+  - `recommended_actions`: Advisory action items
+  - `errors`: Sanitized execution errors (`SafeExecutionError`)
+  - `safe_error_message`: Optional safe error summary
+  - `executed_at`: Timezone-aware UTC timestamp
+
+#### 2. Get Multi-Agent Capabilities
+- **Method & Route**: `GET /agents/capabilities`
+- **Authentication**: Required (`Bearer <JWT>`)
+- **Response Schema (`AgentCapabilitiesResponse`)**:
+  - `role`: Caller's authoritative role (`employee`, `manager`, `admin`)
+  - `supported_intents`: Permitted intents for the authenticated role (`IntentCapabilityInfo`)
+  - `available_specialists`: Registered domain specialist agents (`SpecialistCapabilityInfo`)
+  - `advisory_limitations`: Standard responsible AI guidelines and constraints
+  - *Zero Information Leakage*: Excludes prompts, database collections, API keys, security matrices, reason code lookups, and employee records.
+
+### Server-Side Authorization & Safety Guarantees
+- **Zero Client Trust**: `AuthenticatedPrincipal` is resolved strictly server-side from MongoDB (`assigned_team_id` and verified `managed_team_ids`).
+- **Role Scoping**:
+  - `employee`: Limited to individual assigned tasks and team collaboration. Task assignment and organization-wide analytics return `403 Forbidden`.
+  - `manager`: Limited strictly to managed teams. Cross-team access returns `403 Forbidden`. Final assignment authority remains strictly with the human manager.
+  - `admin`: Organization-wide oversight. Operational task assignment recommendations are disabled (`403 Forbidden`).
+- **Strict Well-being Isolation**: Well-being pulse data is permanently isolated from Task Assignment recommendations across all layers.
+- **Error Mapping**:
+  - `401 Unauthorized`: Missing or invalid authentication token.
+  - `403 Forbidden`: Role policy violation, cross-team scope violation, or prohibited dependency flow.
+  - `404 Not Found`: Authorized target task or resource not found.
+  - `422 Unprocessable Content`: Schema constraint violation or extra fields.
+  - `503 Service Unavailable`: LLM provider unavailable or missing production LLM configuration.
+  - `504 Gateway Timeout`: Agent execution deadline exceeded.
+  - `200 OK with status="partial"`: Partial success where independent specialists completed safely despite an isolated failure.
+
+---
+
+## 15. Current Architecture & Session Limitations
 
 1. **In-Memory Session Storage:** JWT access tokens are stored strictly in-memory (React state) to prevent browser storage XSS exposure. Page reloads currently require signing in again.
 2. **Token Lifetime & Refresh:** Access tokens expire in 15 minutes. Refresh tokens and server-side token revocation blocklists are not yet implemented.
 3. **Dynamic Role Verification:** The backend resolves the token subject against the live database record on each request, ensuring role modifications or deactivations take effect immediately.
 4. **Role Scope & Privacy Thresholding:** Weekly pulse surveys provide employee self-submission, manager team aggregates with a strict minimum response threshold of 3 for anonymity, and admin privacy-safe audit metadata. No individual well-being scores, mood/stress classifications, or diagnostic labels are computed or exposed.
-5. **Multi-Agent Runtime & Specialists:** The Central Coordinator Agent, Productivity Specialist Agent, Collaboration Specialist Agent, Well-being Specialist Agent, and Task Assignment Specialist Agent are fully implemented, tested, and integrated with the production LLM gateway.
+5. **Multi-Agent Production System:** The Central Coordinator Agent, Productivity Specialist Agent, Collaboration Specialist Agent, Well-being Specialist Agent, Task Assignment Specialist Agent, and secure production API endpoints (`/agents/execute`, `/agents/capabilities`) are fully implemented, tested, and integrated with the production LLM gateway.

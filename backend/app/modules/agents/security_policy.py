@@ -232,6 +232,21 @@ ADMIN_ALLOWED_INTENTS: set[AgentIntent] = {
 }
 
 
+def get_allowed_intents_for_role(role: PrincipalRole) -> set[AgentIntent]:
+    """
+    Returns the authoritative set of permitted intents for a given principal role.
+    Serves as the single source of truth for both runtime authorization and capability discovery.
+    """
+    if role == "employee":
+        return set(EMPLOYEE_ALLOWED_INTENTS)
+    if role == "manager":
+        return set(MANAGER_ALLOWED_INTENTS)
+    if role == "admin":
+        return set(ADMIN_ALLOWED_INTENTS)
+    return set()
+
+
+
 def authorize_user_intent(
     principal: AuthenticatedPrincipal,
     intent: AgentIntent,
