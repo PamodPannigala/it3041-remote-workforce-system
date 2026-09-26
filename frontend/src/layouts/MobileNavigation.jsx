@@ -31,6 +31,7 @@ export default function MobileNavigation({
       { id: "team-tasks", label: "Team Tasks" },
       { id: "team-messages", label: "Team Messages" },
       { id: "pulse-insights", label: "Pulse Insights" },
+      { id: "ai-insights", label: "AI Insights" },
     ],
     admin: [
       { id: "overview", label: "Overview" },
@@ -39,6 +40,7 @@ export default function MobileNavigation({
       { id: "task-audit", label: "Task Audit" },
       { id: "message-audit", label: "Message Audit" },
       { id: "pulse-audit", label: "Pulse Audit" },
+      { id: "ai-insights", label: "AI Insights" },
     ],
   };
 
