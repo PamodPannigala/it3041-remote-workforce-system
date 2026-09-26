@@ -212,30 +212,32 @@ def test_task_assigning_strictly_rejects_collaboration_message():
 
 def test_employee_role_allowed_intents():
     emp = AuthenticatedPrincipal(user_id="emp-1", role="employee", assigned_team_id="team-alpha")
-    assert authorize_user_intent(emp, "productivity_analysis", "team-alpha").allowed is True
-    assert authorize_user_intent(emp, "collaboration_analysis", "team-alpha").allowed is True
-    assert authorize_user_intent(emp, "wellbeing_analysis", "team-alpha").allowed is True
+    # In this release, employee role has no allowed AI insights intents
+    assert authorize_user_intent(emp, "productivity_analysis", "team-alpha").allowed is False
+    assert authorize_user_intent(emp, "collaboration_analysis", "team-alpha").allowed is False
+    assert authorize_user_intent(emp, "wellbeing_analysis", "team-alpha").allowed is False
+    assert authorize_user_intent(emp, "productivity_analysis", "team-alpha").safe_reason_code == "EMPLOYEE_AI_INSIGHTS_FORBIDDEN"
 
 
 def test_employee_task_assignment_denied():
     emp = AuthenticatedPrincipal(user_id="emp-1", role="employee", assigned_team_id="team-alpha")
     dec = authorize_user_intent(emp, "task_assignment_recommendation")
     assert dec.allowed is False
-    assert dec.safe_reason_code == "EMPLOYEE_TASK_ASSIGNMENT_FORBIDDEN"
+    assert dec.safe_reason_code == "EMPLOYEE_AI_INSIGHTS_FORBIDDEN"
 
 
 def test_employee_team_workload_denied():
     emp = AuthenticatedPrincipal(user_id="emp-1", role="employee", assigned_team_id="team-alpha")
     dec = authorize_user_intent(emp, "team_workload_analysis")
     assert dec.allowed is False
-    assert dec.safe_reason_code == "EMPLOYEE_TEAM_WORKLOAD_FORBIDDEN"
+    assert dec.safe_reason_code == "EMPLOYEE_AI_INSIGHTS_FORBIDDEN"
 
 
 def test_employee_cross_team_denied():
     emp = AuthenticatedPrincipal(user_id="emp-1", role="employee", assigned_team_id="team-alpha")
     dec = authorize_user_intent(emp, "productivity_analysis", target_team_id="team-beta")
     assert dec.allowed is False
-    assert dec.safe_reason_code == "EMPLOYEE_CROSS_TEAM_FORBIDDEN"
+    assert dec.safe_reason_code == "EMPLOYEE_AI_INSIGHTS_FORBIDDEN"
 
 
 def test_manager_role_allowed_intents():

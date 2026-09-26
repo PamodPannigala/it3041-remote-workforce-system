@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import re
 from typing import Annotated, Literal
 
 from pydantic import (
@@ -204,13 +205,7 @@ def validate_agent_capability(
 # 2. Role Policy
 # =========================================================================
 
-EMPLOYEE_ALLOWED_INTENTS: set[AgentIntent] = {
-    "productivity_analysis",
-    "collaboration_analysis",
-    "wellbeing_analysis",
-    "task_delay_analysis",
-    "general_workforce_question",
-}
+EMPLOYEE_ALLOWED_INTENTS: set[AgentIntent] = set()
 
 MANAGER_ALLOWED_INTENTS: set[AgentIntent] = {
     "productivity_analysis",
@@ -246,6 +241,133 @@ def get_allowed_intents_for_role(role: PrincipalRole) -> set[AgentIntent]:
     return set()
 
 
+# =========================================================================
+# 2b. Intent Context Relevance Matrix
+# =========================================================================
+
+
+class ContextFieldRelevance(BaseModel):
+    """Canonical specification of whether context fields are required, optional, or forbidden."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    team_scope: Literal["required", "optional", "forbidden"]
+    task_scope: Literal["required", "optional", "forbidden"]
+    weeks_lookback: Literal["required", "optional", "forbidden"]
+
+
+INTENT_CONTEXT_RELEVANCE_MATRIX: dict[AgentIntent, ContextFieldRelevance] = {
+    "productivity_analysis": ContextFieldRelevance(
+        team_scope="required",
+        task_scope="optional",
+        weeks_lookback="optional",
+    ),
+    "collaboration_analysis": ContextFieldRelevance(
+        team_scope="required",
+        task_scope="optional",
+        weeks_lookback="optional",
+    ),
+    "wellbeing_analysis": ContextFieldRelevance(
+        team_scope="required",
+        task_scope="forbidden",
+        weeks_lookback="optional",
+    ),
+    "task_assignment_recommendation": ContextFieldRelevance(
+        team_scope="required",
+        task_scope="required",
+        weeks_lookback="forbidden",
+    ),
+    "task_delay_analysis": ContextFieldRelevance(
+        team_scope="required",
+        task_scope="optional",
+        weeks_lookback="optional",
+    ),
+    "team_workload_analysis": ContextFieldRelevance(
+        team_scope="required",
+        task_scope="forbidden",
+        weeks_lookback="optional",
+    ),
+    "general_workforce_question": ContextFieldRelevance(
+        team_scope="required",
+        task_scope="forbidden",
+        weeks_lookback="optional",
+    ),
+}
+
+
+# =========================================================================
+# 2c. Public Prose Identifier Sanitizer
+# =========================================================================
+
+OBJECT_ID_REGEX = re.compile(r"\b[0-9a-fA-F]{24}\b")
+UUID_REGEX = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
+EMAIL_REGEX = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+INTERNAL_CODE_REGEX = re.compile(r"\b(?:[A-Z][A-Z0-9]*_){1,}[A-Z0-9]+\b")
+REQUEST_ID_REGEX = re.compile(r"\b(?:user|team|task|request|req|corr|correlation)[-_](?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]+\b", re.IGNORECASE)
+EXPLICIT_ID_LABEL_REGEX = re.compile(r"\s*\((?:ID|id):\s*[^)]+\)", re.IGNORECASE)
+ID_LABEL_PREFIX_REGEX = re.compile(r"\b(?:ID|id):\s*[0-9a-fA-F-]{20,64}\b", re.IGNORECASE)
+
+
+def sanitize_public_prose(
+    text: str | None,
+    known_identifiers: set[str] | list[str] | None = None,
+) -> str:
+    """
+    Sanitizes human-readable public prose strings by scrubbing internal database IDs,
+    MongoDB ObjectIDs, internal UUIDs, email addresses, and known request identifiers.
+    Guarantees no internal database IDs or PII are exposed in top-level summaries,
+    findings, limitations, recommended actions, or safe error messages.
+    """
+    if not text or not isinstance(text, str):
+        return "" if text is None else str(text)
+
+    sanitized = text
+
+    # 1. Scrub explicit '(ID: <id>)' label annotations
+    sanitized = EXPLICIT_ID_LABEL_REGEX.sub("", sanitized)
+
+    # 2. Scrub standalone 'ID: <id>'
+    sanitized = ID_LABEL_PREFIX_REGEX.sub("", sanitized)
+
+    # 3. Scrub known identifiers passed by caller
+    if known_identifiers:
+        for ident in known_identifiers:
+            if ident and isinstance(ident, str) and len(ident.strip()) > 0:
+                ident_str = ident.strip()
+                if ident_str in sanitized:
+                    sanitized = re.sub(r"(?<![\w])" + re.escape(ident_str) + r"(?![\w])", "the selected item", sanitized, flags=re.IGNORECASE)
+
+    # 4. Scrub any remaining 24-character hexadecimal MongoDB ObjectIDs
+    sanitized = OBJECT_ID_REGEX.sub("the selected item", sanitized)
+
+    # 5. Scrub email addresses
+    sanitized = EMAIL_REGEX.sub("[redacted email]", sanitized)
+
+    # 6. Scrub UUIDs
+    sanitized = UUID_REGEX.sub("the reference item", sanitized)
+    sanitized = INTERNAL_CODE_REGEX.sub("[redacted code]", sanitized)
+    sanitized = REQUEST_ID_REGEX.sub("the selected item", sanitized)
+
+    # 7. Clean up contextual phrasing
+    sanitized = sanitized.replace("team (the selected item)", "the selected team")
+    sanitized = sanitized.replace("team the selected item", "the selected team")
+    sanitized = sanitized.replace("task (the selected item)", "the selected task")
+    sanitized = sanitized.replace("task the selected item", "the selected task")
+    sanitized = sanitized.replace("to a single team the selected item", "to the selected team")
+    sanitized = sanitized.replace("to a single team (the selected item)", "to the selected team")
+    sanitized = sanitized.replace("to a single team ()", "to the selected team")
+    sanitized = sanitized.replace("single team .", "the selected team.")
+    sanitized = sanitized.replace("single team.", "the selected team.")
+
+    # 8. Clean up extra whitespace and empty parentheses
+    sanitized = re.sub(r"\(\s*\)", "", sanitized)
+    sanitized = re.sub(r"[ \t]+", " ", sanitized)
+    sanitized = re.sub(r" \.", ".", sanitized)
+    sanitized = re.sub(r" ,", ",", sanitized)
+
+    return sanitized.strip()
+
+
 
 def authorize_user_intent(
     principal: AuthenticatedPrincipal,
@@ -254,35 +376,16 @@ def authorize_user_intent(
 ) -> AuthorizationDecision:
     """
     Validates user role permissions for requesting agent analyses.
-    - Employee: Cannot request task assignments or organization-wide analyses.
+    - Employee: Cannot request any AI Insights analysis.
     - Manager: Can request task assignments and analyses for managed teams.
-    - Admin: Read-only organization-wide analyses; task assignment disabled by default.
+    - Admin: Existing oversight analyses with explicit team selection; task assignment disabled.
     """
     if principal.role == "employee":
-        if intent == "task_assignment_recommendation":
-            return AuthorizationDecision(
-                allowed=False,
-                safe_reason_code="EMPLOYEE_TASK_ASSIGNMENT_FORBIDDEN",
-                safe_message="Employees are not authorized to request task assignment recommendations",
-            )
-        if intent == "team_workload_analysis":
-            return AuthorizationDecision(
-                allowed=False,
-                safe_reason_code="EMPLOYEE_TEAM_WORKLOAD_FORBIDDEN",
-                safe_message="Employees are not authorized to request team-wide workload analyses",
-            )
-        if target_team_id and target_team_id != principal.assigned_team_id:
-            return AuthorizationDecision(
-                allowed=False,
-                safe_reason_code="EMPLOYEE_CROSS_TEAM_FORBIDDEN",
-                safe_message="Employees cannot request analyses for teams other than their assigned team",
-            )
-        if intent not in EMPLOYEE_ALLOWED_INTENTS:
-            return AuthorizationDecision(
-                allowed=False,
-                safe_reason_code="ROLE_INTENT_FORBIDDEN",
-                safe_message=f"Role 'employee' is not authorized to request intent '{intent}'",
-            )
+        return AuthorizationDecision(
+            allowed=False,
+            safe_reason_code="EMPLOYEE_AI_INSIGHTS_FORBIDDEN",
+            safe_message="AI Insights and Coordinator workflows are restricted to managers and administrators",
+        )
 
     elif principal.role == "manager":
         if target_team_id and target_team_id not in principal.managed_team_ids:

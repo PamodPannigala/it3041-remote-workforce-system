@@ -58,6 +58,7 @@ from backend.app.modules.agents.security_policy import (
     validate_evidence_team_scope,
     validate_request_dependencies,
     validate_responsible_ai_guardrails,
+    sanitize_public_prose,
 )
 
 logger = logging.getLogger("remote_workforce.agents.runtime")
@@ -268,6 +269,8 @@ class ExecutionContext(BaseModel):
     principal: AuthenticatedPrincipal
     request: AgentRequest
     dependency_findings: list[AgentFinding] = Field(default_factory=list)
+    # Per-execution tool facts; never accepted in client requests or shared across tasks.
+    evidence_metrics: dict[str, Any] = Field(default_factory=dict, exclude=True)
 
 
 # =========================================================================
@@ -358,6 +361,38 @@ class StructuredAgentFindingOutput(BaseModel):
             StringConstraints(strip_whitespace=True, min_length=1, max_length=300),
         ]
     ] = Field(default_factory=list, max_length=20)
+
+
+def bound_specialist_confidence(
+    raw_confidence: float,
+    evidence_refs: list[EvidenceReference] | None = None,
+    limitations: list[str] | None = None,
+) -> float:
+    """
+    Bounds specialist confidence deterministically by evidence completeness.
+    A finding with a small evidence sample or missing important fields or explicit
+    limitations must never return 1.0.
+    """
+    conf = float(raw_confidence)
+    ev_count = len(evidence_refs) if evidence_refs else 0
+    lims = [l for l in (limitations or []) if l.strip()]
+
+    # If explicit evidence limitations exist, cap at 0.85 (never 1.0)
+    if lims:
+        conf = min(conf, 0.85)
+
+    # Bound by evidence completeness:
+    if ev_count == 0:
+        conf = min(conf, 0.30)
+    elif ev_count < 3:
+        conf = min(conf, 0.70)
+    elif ev_count < 5:
+        conf = min(conf, 0.85)
+
+    if lims or ev_count < 5:
+        conf = min(conf, 0.85)
+
+    return round(max(0.0, min(conf, 1.0)), 2)
 
 
 # =========================================================================
@@ -501,7 +536,7 @@ class AgentRuntime:
         target_agent = agent_def.name
 
         # 2. Enforce Security Policy: User Intent & Role Scope
-        user_auth = authorize_user_intent(principal, request.intent)
+        user_auth = authorize_user_intent(principal, request.intent, target_team_id=request.target_team_id)
         if not user_auth.allowed:
             await self._record_audit(
                 create_authorization_audit_event(
@@ -607,6 +642,13 @@ class AgentRuntime:
             request=request,
             dependency_findings=request.dependency_findings,
         )
+        from backend.app.modules.agents.confidence_scorer import is_prohibited_request
+        if is_prohibited_request(request.question):
+            return create_agent_response(
+                correlation_id=correlation_id, sender=target_agent, recipient=request.sender,
+                status="failed", message_type="error", error_code="PROHIBITED_REQUEST",
+                safe_error_message="This request cannot be analysed using authorized team evidence.",
+            )
 
         # 7. Collect and Validate Tools / Evidence
         collected_evidence: list[EvidenceReference] = list(request.evidence_refs)
@@ -709,7 +751,7 @@ class AgentRuntime:
                 try:
                     tool_refs = await tool.execute(context)
                 except AgentAuthorizationError as e:
-                    logger.warning("Tool %s authorization failed: %s", t_name, e)
+                    logger.warning("Tool %s authorization failed: %s", t_name, type(e).__name__)
                     await self._record_audit(
                         create_authorization_audit_event(
                             correlation_id=correlation_id,
@@ -731,7 +773,7 @@ class AgentRuntime:
                         safe_error_message=e.safe_message,
                     )
                 except Exception as e:
-                    logger.warning("Tool %s execution failed: %s", t_name, e)
+                    logger.warning("Tool %s execution failed: %s", t_name, type(e).__name__)
                     await self._record_audit(
                         create_policy_audit_event(
                             correlation_id=correlation_id,
@@ -842,6 +884,7 @@ class AgentRuntime:
                 response_model=agent_def.response_model,
                 correlation_id=correlation_id,
             )
+            structured_content = llm_result.content
             await self._record_audit(
                 create_llm_audit_event(
                     correlation_id=correlation_id,
@@ -865,15 +908,26 @@ class AgentRuntime:
                     safe_reason_code="OUTPUT_VALIDATION_ERROR",
                 )
             )
-            return create_agent_response(
-                correlation_id=correlation_id,
-                sender=target_agent,
-                recipient=request.sender,
-                status="failed",
-                message_type="error",
-                error_code="OUTPUT_VALIDATION_ERROR",
-                safe_error_message="Structured LLM response validation failed",
-            )
+            if (target_agent == "task_assigning"
+                    and isinstance(e, LLMResponseValidationError)
+                    and context.evidence_metrics.get("task_assignment") is not None):
+                from backend.app.modules.agents.task_assignment import TaskAssignmentFindingOutput
+                # No provider claims survived parsing. Continue through the same
+                # deterministic formatting, privacy and policy checks below.
+                structured_content = TaskAssignmentFindingOutput(
+                    summary="Verified task and candidate evidence reviewed.",
+                    confidence=context.evidence_metrics["task_assignment_confidence"],
+                )
+            else:
+                return create_agent_response(
+                    correlation_id=correlation_id,
+                    sender=target_agent,
+                    recipient=request.sender,
+                    status="failed",
+                    message_type="error",
+                    error_code="OUTPUT_VALIDATION_ERROR",
+                    safe_error_message="Structured LLM response validation failed",
+                )
         except (LLMAuthenticationError, LLMConfigurationError, LLMUnavailableError, LLMError) as e:
             await self._record_audit(
                 create_llm_audit_event(
@@ -897,7 +951,7 @@ class AgentRuntime:
                 safe_error_message="LLM provider is currently unavailable",
             )
         except Exception as e:
-            logger.exception("Unexpected error during agent execution: %s", type(e).__name__)
+            logger.error("Unexpected error during agent execution: %s", type(e).__name__)
             await self._record_audit(
                 create_llm_audit_event(
                     correlation_id=correlation_id,
@@ -921,18 +975,47 @@ class AgentRuntime:
             )
 
         # 11. Convert LLM structured output to AgentFinding
-        structured_content = llm_result.content
+        from backend.app.modules.agents.confidence_scorer import (
+            compute_productivity_confidence_from_evidence,
+            compute_collaboration_confidence, compute_collaboration_confidence_from_evidence,
+            sanitize_specialist_output,
+        )
+        metrics = context.evidence_metrics
+        wb_metrics = metrics.get("wellbeing")
+        task_metrics = metrics.get("task_assignment")
+        task_details = task_metrics.task_assignment_details if task_metrics else None
+        if target_agent == "productivity":
+            evidence_confidence = metrics.get("productivity_confidence", compute_productivity_confidence_from_evidence(final_evidence))
+        elif target_agent == "collaboration":
+            evidence_confidence = (
+                compute_collaboration_confidence(
+                    metrics.get("collaboration_messages", 0), metrics.get("collaboration_blockers", 0),
+                    metrics.get("collaboration_timestamps", True) and metrics.get("collaboration_blocker_timestamps", True),
+                ) if metrics or request.target_task_id else compute_collaboration_confidence_from_evidence(final_evidence)
+            )
+        elif target_agent == "wellbeing":
+            evidence_confidence = wb_metrics.deterministic_confidence if wb_metrics else 0.0
+        elif target_agent == "task_assigning":
+            evidence_confidence = metrics.get("task_assignment_confidence", 0.30)
+        else:
+            evidence_confidence = 0.0
+
         if isinstance(structured_content, AgentFinding):
-            finding = structured_content
+            finding = structured_content.model_copy(update={
+                "agent": target_agent, "correlation_id": correlation_id,
+                "evidence_refs": final_evidence, "task_assignment_details": task_details,
+                "confidence": evidence_confidence,
+            })
         elif isinstance(structured_content, StructuredAgentFindingOutput):
             finding = AgentFinding(
                 agent=target_agent,
                 summary=structured_content.summary,
                 correlation_id=correlation_id,
                 evidence_refs=final_evidence,
-                confidence=structured_content.confidence,
+                confidence=evidence_confidence,
                 limitations=structured_content.limitations,
                 recommended_actions=structured_content.recommended_actions,
+                task_assignment_details=task_details,
             )
         elif hasattr(structured_content, "summary"):
             finding = AgentFinding(
@@ -940,9 +1023,10 @@ class AgentRuntime:
                 summary=str(getattr(structured_content, "summary")),
                 correlation_id=correlation_id,
                 evidence_refs=final_evidence,
-                confidence=float(getattr(structured_content, "confidence", 1.0)),
+                confidence=evidence_confidence,
                 limitations=list(getattr(structured_content, "limitations", [])),
                 recommended_actions=list(getattr(structured_content, "recommended_actions", [])),
+                task_assignment_details=task_details,
             )
         else:
             await self._record_audit(
@@ -965,6 +1049,122 @@ class AgentRuntime:
                 error_code="OUTPUT_SCHEMA_INVALID",
                 safe_error_message="LLM output schema does not conform to expected format",
             )
+
+        # Check the original output before removing unsupported domain claims.
+        raw_policy = validate_responsible_ai_guardrails(
+            agent=target_agent, intent=request.intent, finding=finding,
+            dependency_findings=request.dependency_findings,
+        )
+        if not raw_policy.allowed:
+            return create_agent_response(
+                correlation_id=correlation_id, sender=target_agent, recipient=request.sender,
+                status="failed", message_type="error", error_code=raw_policy.safe_reason_code,
+                safe_error_message=raw_policy.safe_message,
+            )
+
+        if target_agent == "task_assigning" and task_metrics:
+            from backend.app.modules.agents.task_assignment import validate_task_assignment_grounding
+            eligible_matches = [c for c in task_metrics.candidate_matches if c.skill_coverage_ratio == 1.0]
+            ok, _ = validate_task_assignment_grounding(structured_content, eligible_matches)
+            if not ok:
+                # Reject the provider's candidate claims, not the verified evaluation.
+                # Never log the validator's reason: it may contain candidate IDs or names.
+                await self._record_audit(
+                    create_policy_audit_event(
+                        correlation_id=correlation_id,
+                        actor_user_id=principal.user_id,
+                        actor_role=principal.role,
+                        agent=target_agent,
+                        event_type="output_validation_failed",
+                        outcome="failure",
+                        safe_reason_code="OUTPUT_GROUNDING_ERROR",
+                    )
+                )
+            # Candidate reasoning is constructed from the same deterministic data as
+            # the cards. Free-form LLM rationale cannot add an unverified candidate.
+            finding = finding.model_copy(update={
+                "summary": task_metrics.to_summary_text()[:3000],
+                "recommended_actions": task_metrics.to_manager_actions(),
+                "limitations": ["Advisory only; the manager makes the final decision."],
+            })
+
+        if target_agent == "collaboration" and request.target_task_id:
+            # A phrase replacement cannot ground a numerical claim (including a
+            # claimed absence of blockers). Render task-scoped findings from the
+            # same trusted facts used by the evidence tools and confidence scorer.
+            blocker_metrics = metrics.get("collaboration_task_blocker_metrics")
+            message_count = metrics.get("collaboration_messages", 0)
+            scoped_summary = (
+                blocker_metrics.to_task_summary_text() if blocker_metrics else
+                "No verified blocker metrics for the selected task were available."
+            )
+            if message_count:
+                scoped_summary += f" {message_count} collaboration message(s) explicitly linked to the selected task were found within the requested period."
+            scoped_limitations = ["Only blockers and messages explicitly linked to the selected task were evaluated."]
+            if blocker_metrics and blocker_metrics.invalid_timestamp_count:
+                scoped_limitations.append("Invalid timestamps in selected-task blocker records limit resolution-time calculations.")
+            if not metrics.get("collaboration_timestamps", True):
+                scoped_limitations.append("Missing or invalid timestamps in selected-task messages limit time-based observations.")
+            scoped_actions = [
+                "Review the active blockers explicitly linked to the selected task and confirm their resolution status."
+                if blocker_metrics and blocker_metrics.unresolved_blocker_count else
+                "Record and review any new blockers explicitly linked to the selected task."
+            ]
+            if not message_count:
+                scoped_actions.append("Link relevant collaboration messages explicitly to the selected task before assessing its communication evidence.")
+            finding = finding.model_copy(update={
+                "summary": scoped_summary, "limitations": scoped_limitations,
+                "recommended_actions": scoped_actions,
+            })
+
+        from backend.app.modules.agents.grounded_reporting import grounded_specialist_update
+        grounded_update = grounded_specialist_update(target_agent, context)
+        if grounded_update:
+            finding = finding.model_copy(update=grounded_update)
+        elif target_agent == "collaboration" and not request.target_task_id:
+            from backend.app.modules.agents.collaboration_reporting import validated_team_collaboration_update
+            collaboration_update = validated_team_collaboration_update(finding, structured_content, context)
+            if collaboration_update:
+                finding = finding.model_copy(update=collaboration_update)
+        elif target_agent == "productivity" and request.weeks_lookback:
+            finding = finding.model_copy(update={"limitations": list(dict.fromkeys([
+                *finding.limitations,
+                f"The {request.weeks_lookback}-week request limits task activity dates where applicable. Productivity is a current snapshot, not historical throughput over that window.",
+            ]))})
+
+        known_ids = {principal.user_id, request.target_team_id or "", request.target_task_id or "", correlation_id}
+        known_ids.add(request.conversation_id or "")
+        known_ids.update(principal.managed_team_ids)
+        known_ids.update(ref.record_id for ref in final_evidence)
+        if task_metrics:
+            known_ids.update(c.candidate_id for c in task_metrics.candidate_matches)
+        if task_details:
+            def public_details(value, key=""):
+                if isinstance(value, str):
+                    if key in ("eligibility_status", "recommendation_label"):
+                        return value
+                    return sanitize_public_prose(value, known_ids)
+                if isinstance(value, list):
+                    return [public_details(item) for item in value]
+                if isinstance(value, dict):
+                    return {k: public_details(item, k) for k, item in value.items()}
+                return value
+            task_details = type(task_details).model_validate(public_details(task_details.model_dump()))
+        summary, limitations, actions = sanitize_specialist_output(
+            target_agent, finding.summary, finding.limitations, finding.recommended_actions,
+            target_task_id=request.target_task_id,
+            is_single_week_wellbeing=target_agent == "wellbeing" and wb_metrics is not None and wb_metrics.total_privacy_safe_weeks == 1,
+            task_messages_unavailable=not any(ref.source_type == "collaboration_message" for ref in final_evidence),
+            known_identifiers=known_ids,
+            workflow_intent=request.workflow_intent or request.intent,
+        )
+        finding = finding.model_copy(update={
+            "summary": summary, "limitations": limitations, "recommended_actions": actions,
+            # The domain scorer is authoritative; generic schema heuristics cannot
+            # change its verified score based on the LLM's advisory wording.
+            "confidence": evidence_confidence,
+            "task_assignment_details": task_details,
+        })
 
         # 12. Enforce output character limits (max_output_chars)
         total_output_chars = (
@@ -1086,7 +1286,7 @@ class AgentRuntime:
         try:
             await self.audit_sink.record_event(event)
         except Exception as e:
-            logger.warning("Failed to record agent audit event: %s", e)
+            logger.warning("Failed to record agent audit event: %s", type(e).__name__)
 
 
 # =========================================================================

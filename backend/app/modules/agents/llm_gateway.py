@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Any, Callable, Generic, TypeVar
 from urllib.parse import urlparse
 
@@ -902,9 +903,11 @@ class FakeLLMGateway(LLMGateway):
         self,
         default_response: BaseModel | None = None,
         handler: Callable[..., Any] | None = None,
+        default_responses: dict[type, Any] | None = None,
     ):
         self.default_response = default_response
         self.handler = handler
+        self.default_responses = default_responses or {}
         self.calls: list[dict[str, Any]] = []
 
     @property
@@ -953,15 +956,117 @@ class FakeLLMGateway(LLMGateway):
                 request_id=f"fake-req-{correlation_id}",
             )
 
+        if response_model in self.default_responses:
+            val = self.default_responses[response_model]
+            if isinstance(val, response_model):
+                content = val
+            elif isinstance(val, (BaseModel, dict)):
+                try:
+                    content = (
+                        response_model.model_validate(val.model_dump())
+                        if isinstance(val, BaseModel)
+                        else response_model.model_validate(val)
+                    )
+                except ValidationError as e:
+                    raise LLMResponseValidationError(
+                        f"Fake response schema mismatch for {response_model.__name__}: {e}"
+                    ) from e
+            else:
+                content = val
+            return LLMResult(
+                content=content,
+                model="fake-llm-model",
+                usage=LLMUsage(prompt_tokens=10, completion_tokens=10, total_tokens=20),
+                request_id=f"fake-req-{correlation_id}",
+            )
+
         if self.default_response is not None:
             if isinstance(self.default_response, response_model):
                 content = self.default_response
-            elif isinstance(self.default_response, BaseModel):
-                content = response_model.model_validate(self.default_response.model_dump())
-            elif isinstance(self.default_response, dict):
-                content = response_model.model_validate(self.default_response)
+                return LLMResult(
+                    content=content,
+                    model="fake-llm-model",
+                    usage=LLMUsage(prompt_tokens=10, completion_tokens=10, total_tokens=20),
+                    request_id=f"fake-req-{correlation_id}",
+                )
+            try:
+                content = (
+                    response_model.model_validate(self.default_response.model_dump())
+                    if isinstance(self.default_response, BaseModel)
+                    else response_model.model_validate(self.default_response)
+                )
+                return LLMResult(
+                    content=content,
+                    model="fake-llm-model",
+                    usage=LLMUsage(prompt_tokens=10, completion_tokens=10, total_tokens=20),
+                    request_id=f"fake-req-{correlation_id}",
+                )
+            except ValidationError as e:
+                raise LLMResponseValidationError(
+                    f"Fake response schema mismatch for {response_model.__name__}: {e}"
+                ) from e
+
+        # Fallback for CoordinatorIntentClassification when testing coordinator without custom classification mock
+        if response_model.__name__ == "CoordinatorIntentClassification":
+            lower_prompt = user_prompt.lower()
+            intent = None
+            conf = 0.90
+            req_clarify = False
+            clarify_q = None
+            req_ctx: list[str] = []
+
+            if "tell me about" in lower_prompt or "ambiguous" in lower_prompt:
+                intent = None
+                conf = 0.45
+                req_clarify = True
+                clarify_q = "Would you like to analyse productivity, collaboration, workload, or aggregated well-being trends?"
+            elif "who should" in lower_prompt or "candidate" in lower_prompt or "assign" in lower_prompt:
+                intent = "task_assignment_recommendation"
+                conf = 0.95
+                req_ctx = ["target_task_id"]
+            elif "delay" in lower_prompt:
+                intent = "task_delay_analysis"
+                conf = 0.92
+            elif "workload" in lower_prompt or "capacity" in lower_prompt or "balance" in lower_prompt:
+                intent = "team_workload_analysis"
+                conf = 0.91
+            elif "wellbeing" in lower_prompt or "well-being" in lower_prompt or "morale" in lower_prompt or "burnout" in lower_prompt or "pulse" in lower_prompt:
+                intent = "wellbeing_analysis"
+                conf = 0.93
+            elif "blocker" in lower_prompt or "collaboration" in lower_prompt or "silo" in lower_prompt or "communication" in lower_prompt:
+                intent = "collaboration_analysis"
+                conf = 0.91
+            elif "broad" in lower_prompt or "overview" in lower_prompt or "general" in lower_prompt:
+                intent = "general_workforce_question"
+                conf = 0.90
             else:
-                content = self.default_response
+                intent = "productivity_analysis"
+                conf = 0.88
+
+            content = response_model(  # type: ignore
+                intent=intent,
+                confidence=conf,
+                requires_clarification=req_clarify,
+                clarification_question=clarify_q,
+                required_context=req_ctx,
+            )
+            return LLMResult(
+                content=content,
+                model="fake-llm-model",
+                usage=LLMUsage(prompt_tokens=10, completion_tokens=10, total_tokens=20),
+                request_id=f"fake-req-{correlation_id}",
+            )
+
+        # Fallback for CoordinatorSynthesisOutput
+        if response_model.__name__ == "CoordinatorSynthesisOutput":
+            claim_ids = re.findall(r"\[(claim[_-][^\]]+)\]", user_prompt)
+            action_ids = re.findall(r"\[(action[_-][^\]]+)\]", user_prompt)
+            limitation_ids = re.findall(r"\[(limitation[_-][^\]]+)\]", user_prompt)
+            content = response_model(  # type: ignore
+                selected_claim_ids=claim_ids,
+                selected_action_ids=action_ids,
+                selected_limitation_ids=limitation_ids,
+            )
             return LLMResult(
                 content=content,
                 model="fake-llm-model",

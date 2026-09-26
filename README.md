@@ -25,6 +25,7 @@ Configure a `.env` file inside the `backend/` directory with the following varia
 - `LLM_MODEL` — Chat completion model identifier (defaults to `gpt-4o-mini`)
 - `LLM_TIMEOUT_SECONDS` — Request timeout limit in seconds (defaults to `30.0`)
 - `LLM_MAX_RETRIES` — Maximum retry count for transient network/rate-limit errors (defaults to `3`)
+- `COORDINATOR_TIMEOUT_SECONDS` — Multi-agent Coordinator execution timeout in seconds (defaults to `90.0`, valid range `10.0`–`180.0`)
 
 To generate a secure 256-bit random key locally without exposing it:
 ```powershell
@@ -113,8 +114,8 @@ npm run build
 | `/admin/pulse-surveys` | `GET` | `admin` | Audit pulse survey submission metadata (privacy-safe, read-only) |
 | `/admin/pulse-surveys/summary` | `GET` | `admin` | Organization-wide per-team pulse summaries with privacy thresholding |
 | `/api/search` | `GET` | Authenticated (`employee`, `manager`, `admin`) | Lexical Information Retrieval with BM25 ranking and pre-ranking RBAC |
-| `/agents/execute` | `POST` | Authenticated (`employee`, `manager`, `admin`) | Secure execution of multi-agent workflows with server-side authorization |
-| `/agents/capabilities` | `GET` | Authenticated (`employee`, `manager`, `admin`) | Role-filtered capabilities, supported intents, and advisory limitations |
+| `/agents/execute` | `POST` | Authenticated (`manager`, `admin`) | Secure execution of multi-agent workflows with server-side authorization |
+| `/agents/capabilities` | `GET` | Authenticated (`manager`, `admin`) | Role-filtered capabilities, supported intents, and advisory limitations |
 
 ### JSON Login Request Example
 ```json
@@ -237,9 +238,9 @@ The system provides a centralized security policy layer and privacy-safe audit l
   - `wellbeing` agent is restricted strictly to aggregate `pulse_summary` and verified `agent_finding` data.
 
 ### Role & Team-Scope Policy
-- **Employee**: Authorized for productivity/collaboration/wellbeing within assigned team tasks; strictly forbidden from task assignment recommendations or team workload overviews.
+- **Employee**: AI Insights access is disabled. Every analysis and capability request returns a safe 403 before coordinator initialization, metadata, or evidence collection.
 - **Manager**: Authorized for productivity/collaboration/wellbeing and task assignment recommendations scoped strictly to managed teams; cannot receive individual pulse responses.
-- **Admin**: Read-only organization-wide analytics; task assignment recommendations are disabled by default.
+- **Admin**: Read-only oversight of the explicitly selected team; Task Assignment remains disabled.
 - **Defense-in-Depth**: Policy validation serves as defense-in-depth; specialist data services must also enforce database-level RBAC filters when querying MongoDB.
 
 ### Cross-Agent Dependency Graph
@@ -330,9 +331,9 @@ The Productivity Agent analyzes authorized task-management evidence and returns 
 
 ### Role & Team Scoping (Database Pre-Filtering)
 Authorization filters are strictly applied at the database level before documents become candidates:
-- **Employee**: Strictly filtered to tasks assigned to the authenticated user (`assigned_to == user_id`) and belonging to their authorized team (`team_id == assigned_team_id`). Cross-team queries are rejected.
-- **Manager**: Scoped strictly to tasks belonging to teams the manager actually manages (`team_id in managed_team_ids`). Unmanaged team queries are rejected.
-- **Admin**: Audits organization-wide tasks within the authorized productivity intent boundaries.
+- **Employee**: Denied access to AI analysis. No Employee self-insights workflow is implemented.
+- **Manager**: Requires an explicit selected team from `managed_team_ids`; retrieves only that team, or the validated selected task within it. Unmanaged team queries are rejected.
+- **Admin**: Reviews the explicitly selected team within authorized productivity boundaries.
 - **Unassigned User**: Returns an empty authorized evidence set; never leaks organization or other team data.
 
 ### Deterministic Python Metrics
@@ -357,7 +358,7 @@ The agent produces a strictly validated Pydantic model (`extra="forbid"`):
 - `limitations`: Explicit disclosures when evidence is sparse, missing, or limited.
 
 ### Security, Privacy & Responsible AI Controls
-- **Advisory Only**: Output recommendations are strictly advisory for human managers/employees; autonomous mutations are prohibited.
+- **Advisory Only**: Output recommendations are strictly advisory for human managers; autonomous mutations are prohibited.
 - **No Ranking or Punishment**: Strictly forbids employee ranking, peer comparison, punitive actions, or automated termination/disciplinary recommendations.
 - **No Medical/Well-being Inferences**: Prohibits mental health, stress, or diagnostic claims.
 - **Untrusted Evidence Boundary**: Task titles, descriptions, and notes are formatted into structured JSON evidence blocks and treated as untrusted data, neutralizing prompt injection attempts.
@@ -389,9 +390,9 @@ Soft-deleted messages (`is_deleted == true`) are strictly excluded from all quer
 
 ### Role & Team Scoping (Database Pre-Filtering)
 Authorization filters are strictly applied at the database level before documents become candidates:
-- **Employee**: Strictly filtered to active messages and task blockers within the employee's assigned team (`team_id == assigned_team_id`). Cross-team queries are rejected. Unassigned employees receive an empty evidence set.
-- **Manager**: Scoped strictly to messages and task blockers belonging to teams the manager actually manages (`team_id in managed_team_ids`). Unmanaged team queries are rejected. Managers with no managed teams receive an empty evidence set.
-- **Admin**: Read-only organization-wide or requested-team analysis within the authorized collaboration intent boundaries.
+- **Employee**: Denied access to AI analysis before any message or blocker retrieval.
+- **Manager**: Retrieves messages and blockers only from the explicitly selected managed team; selected-task requests further require exact task linkage. Unmanaged team queries are rejected.
+- **Admin**: Read-only analysis of the explicitly selected team.
 - **Defense-in-Depth**: Retained evidence references undergo secondary team-scope validation prior to formatting.
 
 ### Deterministic Python Metrics
@@ -458,9 +459,9 @@ The pulse survey privacy contract is strictly enforced before evidence reaches t
 
 ### Role & Team Scoping (Database Pre-Filtering)
 Authorization filters are strictly applied at the database level before documents become candidates:
-- **Employee**: Scoped strictly to the employee's assigned team (`assigned_team_id`). Cross-team queries are rejected. Unassigned employees receive an empty evidence set.
-- **Manager**: Scoped strictly to teams the manager manages (`team_id in managed_team_ids`). Unmanaged team queries are rejected. Managers with no managed teams receive an empty evidence set.
-- **Admin**: Read-only organization-wide or requested-team aggregate analysis within authorized well-being intent boundaries.
+- **Employee**: Denied access to AI analysis. Pulse self-submission remains a separate feature; no individual Well-being analysis is provided.
+- **Manager**: Requires an explicit selected managed team for privacy-safe aggregate Well-being evidence. Unmanaged team queries are rejected.
+- **Admin**: Read-only privacy-safe aggregates for the explicitly selected team.
 
 ### Deterministic Python Metrics
 Key well-being and trend metrics are calculated deterministically in Python prior to LLM invocation:
@@ -629,6 +630,34 @@ The Coordinator acts as the single orchestration interface for multi-agent workf
 | `team_workload_analysis` | `productivity`, `wellbeing` | Concurrent Multi-Agent | Synthesized Executive Finding + Specialist Findings |
 | `general_workforce_question` | `productivity`, `collaboration`, `wellbeing` | Concurrent Multi-Agent | Synthesized Executive Finding + Specialist Findings |
 
+### Server-owned context and evidence contracts
+
+| Analysis | Team | Task | Lookback weeks |
+|---|---|---|---|
+| Productivity | required | optional | optional |
+| Collaboration | required | optional | optional |
+| Well-being | required | forbidden | optional |
+| Task Assignment | required | required | forbidden |
+| Task Delay | required | optional | optional |
+| Team Workload | required | forbidden | optional |
+| General Workforce | required | forbidden | optional |
+
+Team Workload requires both operational task/capacity and anonymous Well-being semantics. A workload-manageability pulse metric alone routes to Well-being. Ambiguous questions ask about supported capabilities and ignore classifier-suggested required fields. All public clarifications have null confidence and perform no evidence reads.
+
+Selected-task Productivity retrieves exactly that task, even if its creation date predates the lookback (a current task snapshot). Team Productivity filters by task updated/created timestamps when a window is supplied. Collaboration uses the selected team and request window for messages and blocker metrics; active unresolved blockers remain relevant even when old. Only messages with explicit `task_id` linkage may enter selected-task evidence. Without those records it reports that task-linked collaboration-message evidence is unavailable. Task Delay passes the same selected-task evidence to both specialists.
+
+Runtime validation removes unsupported claims from each specialist before synthesis. Exactly one privacy-safe Well-being week produces a "single-week snapshot", never stability or change claims; zero qualifying weeks means evidence is suppressed. Collaboration reports only verified blocker/message observations. Public strings (including task titles, candidate names, reasons, workload text, actions, limitations, and errors) are sanitized in the runtime/API and again in the frontend.
+
+Confidence is computed from trusted per-execution metrics, independent of route and LLM confidence. Productivity uses scoped task count and date/status completeness; Collaboration uses message/blocker counts and timestamp validity; Well-being uses the privacy gate, qualifying weeks, response strength, completeness, and recency. Synthesis cannot exceed the weakest contributing score.
+
+Task Assignment confidence gates on a verified authorized task, nonempty required skills, and at least one eligible candidate (otherwise 0.30). Let N be max(evaluated active candidates, eligible candidates), C the fraction with finite numeric weekly capacity in [0,80] hours, and S the fraction with nonempty verified profile skills, each clamped to [0,1]. Confidence = round(clamp(0.50 + 0.25*C + 0.20*S - (0.15 if C < 0.5 else 0), 0.10, 0.95), 2). Missing profiles count against completeness. Candidate suitability measures task fit and is excluded from this formula. The runtime validates candidate identity, skills, and deterministic order against trusted evidence; it renders deterministic reasons and workload details and requires human capacity confirmation.
+
+The authoritative implementation is `compute_task_assignment_confidence` in `confidence_scorer.py`; the evidence tool supplies its verified inputs and the runtime ignores provider confidence. For C=S=1, confidence is 0.95 even when candidate suitability is 0.91. The earlier 60/40 suitability blend is not the production formula and must not be used to interpret evidence confidence. Python `round(..., 2)` is applied once after the bounds and capacity penalty; coordinator synthesis uses the minimum contributing specialist confidence.
+
+Task Delay, Team Workload, and General Workforce summaries use server-owned metrics through `grounded_reporting.py`. Task estimates are planning values, not actual effort; absent time logs and qualitative evidence, the exact delay cause is unverified. Current task-state snapshots, Collaboration lookback dates, and qualifying anonymous pulse weeks are labeled separately. Overdue tasks establish delivery strain, not exceeded capacity. Blocker-note themes and anonymous pulse-comment NLP are not implemented by this correction.
+
+Analysis HTTP refusals and validation errors return the normal analysis fields with `status=failed`, `confidence=null`, empty findings, and an additional compatibility `detail` message. Missing context returns `clarification_required` with the same analysis fields. Unsupported context consistently uses “not supported”. Partial results expose only the public error classification `specialist_unavailable`, not internal runtime codes. `correlation_id` remains a structured support field and is excluded from prose and clipboard content.
+
 ### Usage Example
 ```python
 from backend.app.modules.agents import (
@@ -637,6 +666,7 @@ from backend.app.modules.agents import (
     AuthenticatedPrincipal,
 )
 
+# Internal server example; public requests contain no intent.
 # Initialize production coordinator with all registered specialists
 coordinator = create_production_coordinator(database=db)
 
@@ -670,20 +700,21 @@ The system exposes secure, authenticated FastAPI endpoints under the `/agents` r
 - **Method & Route**: `POST /agents/execute`
 - **Authentication**: Required (`Bearer <JWT>`)
 - **Request Schema (`AgentExecuteRequest`)**:
-  - `intent`: One of `productivity_analysis`, `collaboration_analysis`, `wellbeing_analysis`, `task_assignment_recommendation`, `task_delay_analysis`, `team_workload_analysis`, `general_workforce_question`
   - `question`: Non-empty string (1–2000 chars)
-  - `target_team_id`: Optional team ID string (max 64 chars)
+  - `target_team_id`: Team selector (max 64 chars); required for every known analysis. Missing scope returns clarification without evidence collection.
   - `target_task_id`: Optional task ID string (max 64 chars)
-  - `weeks_lookback`: Optional integer lookback window (1–52)
+  - `weeks_lookback`: Optional integer lookback window (1-12); forbidden for Task Assignment.
   - `conversation_id`: Optional conversation identifier (max 64 chars)
   - `correlation_id`: Optional valid UUID string
-  - *Strict Validation*: Enforces `extra="forbid"`. Client-supplied roles, team scopes, user IDs, or dependency findings are strictly rejected (HTTP 422).
+  - *Strict Validation*: Enforces `extra="forbid"`. Client-supplied intents, roles, user IDs, managed-team lists, or dependency findings are strictly rejected (HTTP 422).
 - **Response Schema (`AgentExecuteResponse`)**:
   - `correlation_id`: Traceable execution UUID
-  - `intent`: Executed agent intent
-  - `status`: Execution status (`completed`, `partial`, `failed`)
+  - `detected_intent`: Server-detected analysis; the client never selects an intent.
+  - `routing_confidence`, `consulted_specialists`: Routing provenance.
+  - `clarification_question`, `required_context`: Capability or missing-context clarification.
+  - `status`: Execution status (`completed`, `partial`, `failed`, `clarification_required`)
   - `summary`: Consolidated primary or synthesized executive summary
-  - `confidence`: Bounded numeric confidence score ($0.0 \le c \le 1.0$)
+  - `confidence`: Deterministic evidence confidence in [0, 1]; null for clarification and prompt-injection refusal.
   - `findings`: List of sanitized specialist findings (`SpecialistFindingItem`)
   - `limitations`: Advisory constraints and evidence limitations
   - `recommended_actions`: Advisory action items
@@ -695,7 +726,7 @@ The system exposes secure, authenticated FastAPI endpoints under the `/agents` r
 - **Method & Route**: `GET /agents/capabilities`
 - **Authentication**: Required (`Bearer <JWT>`)
 - **Response Schema (`AgentCapabilitiesResponse`)**:
-  - `role`: Caller's authoritative role (`employee`, `manager`, `admin`)
+  - `role`: Caller's authoritative role (`manager`, `admin`)
   - `supported_intents`: Permitted intents for the authenticated role (`IntentCapabilityInfo`)
   - `available_specialists`: Registered domain specialist agents (`SpecialistCapabilityInfo`)
   - `advisory_limitations`: Standard responsible AI guidelines and constraints
@@ -704,14 +735,14 @@ The system exposes secure, authenticated FastAPI endpoints under the `/agents` r
 ### Server-Side Authorization & Safety Guarantees
 - **Zero Client Trust**: `AuthenticatedPrincipal` is resolved strictly server-side from MongoDB (`assigned_team_id` and verified `managed_team_ids`).
 - **Role Scoping**:
-  - `employee`: Limited to individual assigned tasks and team collaboration. Task assignment and organization-wide analytics return `403 Forbidden`.
+  - `employee`: Every AI analysis and capabilities request returns safe `403 Forbidden` before coordinator creation, LLM configuration, metadata, team/task options, or evidence reads. Navigation and direct workspace entry are blocked.
   - `manager`: Limited strictly to managed teams. Cross-team access returns `403 Forbidden`. Final assignment authority remains strictly with the human manager.
-  - `admin`: Organization-wide oversight. Operational task assignment recommendations are disabled (`403 Forbidden`).
+  - `admin`: Existing oversight analyses are preserved with an explicit team selector. Operational Task Assignment remains disabled (`403 Forbidden`). No Executive role is introduced.
 - **Strict Well-being Isolation**: Well-being pulse data is permanently isolated from Task Assignment recommendations across all layers.
 - **Error Mapping**:
   - `401 Unauthorized`: Missing or invalid authentication token.
   - `403 Forbidden`: Role policy violation, cross-team scope violation, or prohibited dependency flow.
-  - `404 Not Found`: Authorized target task or resource not found.
+  - `404 Not Found`: After team authorization succeeds, missing, inaccessible, and cross-team task selectors all return the same safe "Target task not found" response. Authorization failure takes precedence (403); database validation errors fail closed (503).
   - `422 Unprocessable Content`: Schema constraint violation or extra fields.
   - `503 Service Unavailable`: LLM provider unavailable or missing production LLM configuration.
   - `504 Gateway Timeout`: Agent execution deadline exceeded.
@@ -726,3 +757,35 @@ The system exposes secure, authenticated FastAPI endpoints under the `/agents` r
 3. **Dynamic Role Verification:** The backend resolves the token subject against the live database record on each request, ensuring role modifications or deactivations take effect immediately.
 4. **Role Scope & Privacy Thresholding:** Weekly pulse surveys provide employee self-submission, manager team aggregates with a strict minimum response threshold of 3 for anonymity, and admin privacy-safe audit metadata. No individual well-being scores, mood/stress classifications, or diagnostic labels are computed or exposed.
 5. **Multi-Agent Production System:** The Central Coordinator Agent, Productivity Specialist Agent, Collaboration Specialist Agent, Well-being Specialist Agent, Task Assignment Specialist Agent, and secure production API endpoints (`/agents/execute`, `/agents/capabilities`) are fully implemented, tested, and integrated with the production LLM gateway.
+
+---
+
+## 16. Agent Workspace Frontend Usage Instructions
+
+The Agent Workspace provides an enterprise decision-support interface for role-governed multi-agent workforce analysis.
+
+### Accessing the Workspace
+1. Sign in as a Manager or Admin. Employee AI Insights access is disabled.
+2. Click **AI Insights** in the primary desktop sidebar or mobile navigation drawer.
+
+### Workflow & Capabilities
+1. **Capability Selection:**
+   - Capabilities are fetched dynamically from `GET /agents/capabilities` based strictly on your server-side role.
+   - Enter a natural-language question. Capability information describes supported analyses; the server owns intent routing.
+2. **Scoping & Inputs:**
+   - **Inquiry:** Enter your question or guidance request (character counter tracks up to 2000 characters).
+   - **Team Scope:** Select an authorized team for every analysis. Team-less requests require clarification and never run across all managed teams.
+   - **Task Selection:** Required for Task Assignment (Managers only), optional for Productivity, Collaboration, and Task Delay, and forbidden for Well-being, Team Workload, and General Workforce.
+   - **Lookback Window:** Optionally select 1-12 weeks; omit it for Task Assignment.
+3. **Execution & Cancellation:**
+   - Click **Run Multi-Agent Analysis** to initiate execution. Duplicate submissions are disabled while in flight.
+   - An in-flight query displays structured progress and can be aborted at any time using the **Cancel Analysis** button via `AbortController`.
+4. **Advisory Results & Findings:**
+   - **Executive Synthesis:** Consolidated multi-agent evaluation.
+   - **Confidence Meter:** Bounded confidence score paired with accessible textual categorization (*High*, *Moderate*, *Low*).
+   - **Specialist Cards:** Independent domain telemetry findings from Productivity, Collaboration, Well-being, and Task Assignment specialists.
+   - **Advisory Actions & Limitations:** Actionable recommendations and clear data boundary disclaimers.
+   - **Public summary copy:** Copies sanitized summary prose. The structured correlation ID remains in the response for authorized audit tracing but is not displayed or copied.
+5. **Session-Only Recent Analyses:**
+   - Up to 5 analyses are preserved strictly in React component memory for rapid comparison during the active session.
+   - Findings and queries are **never** written to `localStorage`, `sessionStorage`, or IndexedDB, and are securely cleared on logout or page reload.

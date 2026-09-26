@@ -21,6 +21,7 @@ from backend.app.modules.agents.protocol import (
     EvidenceReference,
     EvidenceSourceType,
 )
+from backend.app.modules.agents.confidence_scorer import compute_productivity_confidence
 from backend.app.modules.agents.runtime import (
     AgentAuthorizationError,
     AgentDefinition,
@@ -421,13 +422,14 @@ class ProductivityTaskEvidenceTool(BaseAgentTool):
 
         # 1. Build authoritative database filter based on role and team scope
         filter_query: dict[str, Any] = {}
+        req_team_id = context.request.target_team_id or self.target_team_id
 
         if principal.role == "employee":
             # Employee: reject cross-team requests before querying
-            if self.target_team_id:
-                if principal.assigned_team_id and self.target_team_id != principal.assigned_team_id:
+            if req_team_id:
+                if principal.assigned_team_id and req_team_id != principal.assigned_team_id:
                     raise AgentAuthorizationError(
-                        message=f"Employee cannot access team '{self.target_team_id}'",
+                        message=f"Employee cannot access team '{req_team_id}'",
                         safe_reason_code="EMPLOYEE_CROSS_TEAM_FORBIDDEN",
                         safe_message="Employees cannot request analyses for teams other than their assigned team",
                     )
@@ -446,7 +448,7 @@ class ProductivityTaskEvidenceTool(BaseAgentTool):
 
             filter_query["assigned_to"] = {"$in": user_oids} if len(user_oids) > 1 else user_oids[0]
 
-            team_id = self.target_team_id or principal.assigned_team_id
+            team_id = req_team_id or principal.assigned_team_id
             team_oids: list[Any] = []
             if ObjectId.is_valid(team_id):
                 team_oids.append(ObjectId(team_id))
@@ -457,14 +459,14 @@ class ProductivityTaskEvidenceTool(BaseAgentTool):
 
         elif principal.role == "manager":
             # Manager: reject cross-team requests before querying
-            if self.target_team_id:
-                if self.target_team_id not in principal.managed_team_ids:
+            if req_team_id:
+                if req_team_id not in principal.managed_team_ids:
                     raise AgentAuthorizationError(
-                        message=f"Manager does not manage team '{self.target_team_id}'",
+                        message=f"Manager does not manage team '{req_team_id}'",
                         safe_reason_code="MANAGER_UNMANAGED_TEAM_FORBIDDEN",
                         safe_message="Managers cannot request analyses for teams they do not manage",
                     )
-                target_teams = [self.target_team_id]
+                target_teams = [req_team_id]
             else:
                 if not principal.managed_team_ids:
                     # Manager with no managed teams returns empty candidate set without error
@@ -482,17 +484,27 @@ class ProductivityTaskEvidenceTool(BaseAgentTool):
 
         elif principal.role == "admin":
             # Admin: organization read scope or specific target team
-            if self.target_team_id:
+            if req_team_id:
                 admin_team_oids: list[Any] = []
-                if ObjectId.is_valid(self.target_team_id):
-                    admin_team_oids.append(ObjectId(self.target_team_id))
-                if self.target_team_id not in admin_team_oids:
-                    admin_team_oids.append(self.target_team_id)
+                if ObjectId.is_valid(req_team_id):
+                    admin_team_oids.append(ObjectId(req_team_id))
+                if req_team_id not in admin_team_oids:
+                    admin_team_oids.append(req_team_id)
                 filter_query["team_id"] = {"$in": admin_team_oids} if len(admin_team_oids) > 1 else admin_team_oids[0]
             else:
                 filter_query = {}
         else:
             return []
+
+        # Filter by target task if task scope is supplied
+        req_task_id = context.request.target_task_id
+        if req_task_id:
+            task_oids: list[Any] = []
+            if ObjectId.is_valid(req_task_id):
+                task_oids.append(ObjectId(req_task_id))
+            if req_task_id not in task_oids:
+                task_oids.append(req_task_id)
+            filter_query["_id"] = {"$in": task_oids} if len(task_oids) > 1 else task_oids[0]
 
         # 2. Query MongoDB collection directly with pre-filtering
         try:
@@ -510,12 +522,37 @@ class ProductivityTaskEvidenceTool(BaseAgentTool):
                     if self._match_doc(d, filter_query)
                 ]
         except Exception as e:
-            logger.warning("Database task query failed: %s", e)
+            logger.warning("Database task query failed: %s", type(e).__name__)
             raise AgentToolExecutionError(
                 message="Failed to query tasks collection",
                 safe_reason_code="DATABASE_ERROR",
             )
 
+        task_docs = [doc for doc in task_docs if self._match_doc(doc, filter_query)]
+        # A lookback limits task activity by updated/created date. A selected task is
+        # always evaluated as a current snapshot, even when it predates the window.
+        if context.request.weeks_lookback and not req_task_id:
+            start = datetime.now(timezone.utc) - timedelta(weeks=context.request.weeks_lookback)
+            task_docs = [doc for doc in task_docs if (
+                (stamp := _ensure_utc(doc.get("updated_at") or doc.get("created_at")))
+                is not None and start <= stamp <= datetime.now(timezone.utc)
+            )]
+        context.evidence_metrics["productivity_confidence"] = compute_productivity_confidence(
+            len(task_docs),
+            has_complete_dates=all(_ensure_utc(d.get("due_date")) is not None for d in task_docs),
+            has_complete_statuses=all(d.get("status") in ("todo", "in_progress", "blocked", "completed") for d in task_docs),
+        )
+        context.evidence_metrics["productivity"] = compute_deterministic_task_metrics(task_docs)
+        context.evidence_metrics["productivity_missing_due_dates"] = sum(
+            _ensure_utc(d.get("due_date")) is None for d in task_docs
+        )
+        # Estimates are planning inputs; the task schema has no verified time-log feed.
+        context.evidence_metrics["productivity_estimates"] = [
+            float(d["estimated_hours"]) for d in task_docs
+            if isinstance(d.get("estimated_hours"), (int, float))
+            and not isinstance(d["estimated_hours"], bool) and math.isfinite(d["estimated_hours"])
+            and d["estimated_hours"] >= 0
+        ]
         if not task_docs:
             return []
 
@@ -526,7 +563,7 @@ class ProductivityTaskEvidenceTool(BaseAgentTool):
         evidence_refs: list[EvidenceReference] = []
 
         # Primary summary reference containing computed metrics
-        summary_team_id = (
+        summary_team_id = req_team_id or (
             principal.assigned_team_id
             if principal.role == "employee"
             else (
@@ -588,6 +625,15 @@ class ProductivityTaskEvidenceTool(BaseAgentTool):
                 if doc_val not in allowed_vals and str(doc_val) not in allowed_vals:
                     return False
             elif doc_val != val and str(doc_val) != str(val):
+                return False
+        if "_id" in filter_query:
+            val = filter_query["_id"]
+            doc_id = doc.get("_id")
+            if isinstance(val, dict) and "$in" in val:
+                allowed_ids = [str(x) for x in val["$in"]] + val["$in"]
+                if doc_id not in allowed_ids and str(doc_id) not in allowed_ids:
+                    return False
+            elif doc_id != val and str(doc_id) != str(val):
                 return False
         return True
 

@@ -292,7 +292,7 @@ async def test_normal_execution_calls_llm_gateway_once():
     assert resp.status == "completed"
     assert resp.finding is not None
     assert resp.finding.summary == "Sprint velocity is on track at 45 points."
-    assert resp.finding.confidence == 0.92
+    assert resp.finding.confidence == 0.30  # No trusted task evidence; LLM score is ignored.
     assert fake_gw.call_count == 1
 
     # Verify audit events
@@ -517,7 +517,7 @@ async def test_employee_role_cannot_request_task_assignment():
 
     resp = await runtime.execute_agent(req, principal)
     assert resp.status == "failed"
-    assert resp.error_code == "EMPLOYEE_TASK_ASSIGNMENT_FORBIDDEN"
+    assert resp.error_code == "EMPLOYEE_AI_INSIGHTS_FORBIDDEN"
 
 
 # =========================================================================
@@ -823,7 +823,7 @@ async def test_fake_agent_runtime_deterministic_success():
     resp = await fake_runtime.execute_agent(req, principal)
     assert resp.status == "completed"
     assert resp.finding.summary == "Deterministic test summary"
-    assert resp.finding.confidence == 0.99
+    assert resp.finding.confidence == 0.30  # No trusted task evidence.
 
     assert fake_runtime.in_memory_audit_sink is not None
     events = fake_runtime.in_memory_audit_sink.get_all_events()

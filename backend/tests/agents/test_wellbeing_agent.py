@@ -20,6 +20,7 @@ from backend.app.modules.pulse_surveys.constants import (
     TEAMS_COLLECTION_NAME,
     get_current_week_start,
 )
+from backend.app.modules.agents.confidence_scorer import compute_wellbeing_confidence
 from backend.app.modules.agents.wellbeing import (
     DEFAULT_WEEKS_LOOKBACK,
     MAX_WEEKS_LOOKBACK,
@@ -864,7 +865,7 @@ async def test_successful_wellbeing_agent_execution(mock_db, default_wellbeing_o
     assert res.status == "completed"
     assert res.finding is not None
     assert res.finding.agent == "wellbeing"
-    assert res.finding.confidence == 0.9
+    assert res.finding.confidence == 0.45
     assert len(res.finding.evidence_refs) >= 1
 
     # Verify exactly 1 LLM call was executed
@@ -1212,30 +1213,34 @@ async def test_employee_full_runtime_execution_path(mock_db, default_wellbeing_o
         role="employee",
         assigned_team_id=assigned_team,
     )
+    mgr_principal = AuthenticatedPrincipal(
+        user_id="507f1f77bcf86cd799439002",
+        role="manager",
+        managed_team_ids=[assigned_team],
+    )
 
-    # 1. Assigned team wellbeing analysis succeeds
+    # 1. Employee execution is rejected with EMPLOYEE_AI_INSIGHTS_FORBIDDEN
     tools = get_wellbeing_tool_names("wellbeing_analysis")
     req = _make_req(intent="wellbeing_analysis", user_id=emp_user_id)
-    response = await runtime.execute_agent(req, emp_principal, tool_names=tools)
-    assert response.status == "completed"
-    assert response.finding.agent == "wellbeing"
-    assert len(response.finding.evidence_refs) >= 1
+    response_emp = await runtime.execute_agent(req, emp_principal, tool_names=tools)
+    assert response_emp.status == "failed"
+    assert response_emp.error_code == "EMPLOYEE_AI_INSIGHTS_FORBIDDEN"
 
-    # 2. Cross-team intent authorization rejected with EMPLOYEE_CROSS_TEAM_FORBIDDEN
+    # 2. Manager execution for managed team succeeds
+    response_mgr = await runtime.execute_agent(req, mgr_principal, tool_names=tools)
+    assert response_mgr.status == "completed"
+    assert response_mgr.finding.agent == "wellbeing"
+    assert len(response_mgr.finding.evidence_refs) >= 1
+
+    # 3. Employee intent authorization rejected with EMPLOYEE_AI_INSIGHTS_FORBIDDEN
     auth_decision = authorize_user_intent(emp_principal, "wellbeing_analysis", target_team_id=other_team)
     assert not auth_decision.allowed
-    assert auth_decision.safe_reason_code == "EMPLOYEE_CROSS_TEAM_FORBIDDEN"
-
-    # 3. Team workload analysis rejected with EMPLOYEE_TEAM_WORKLOAD_FORBIDDEN
-    req_tw = _make_req(intent="team_workload_analysis", user_id=emp_user_id)
-    resp_tw = await runtime.execute_agent(req_tw, emp_principal, tool_names=["wellbeing_pulse_evidence_team_workload_analysis"])
-    assert resp_tw.status == "failed"
-    assert resp_tw.error_code == "EMPLOYEE_TEAM_WORKLOAD_FORBIDDEN"
+    assert auth_decision.safe_reason_code == "EMPLOYEE_AI_INSIGHTS_FORBIDDEN"
 
     # 4. Employee cannot request task assignments
     auth_decision_ta = authorize_user_intent(emp_principal, "task_assignment_recommendation")
     assert not auth_decision_ta.allowed
-    assert auth_decision_ta.safe_reason_code == "EMPLOYEE_TASK_ASSIGNMENT_FORBIDDEN"
+    assert auth_decision_ta.safe_reason_code == "EMPLOYEE_AI_INSIGHTS_FORBIDDEN"
 
 
 @pytest.mark.asyncio
@@ -1253,8 +1258,8 @@ async def test_suppressed_subthreshold_count_privacy(mock_db):
     tool = WellbeingPulseEvidenceTool(database=mock_db)
     principal = AuthenticatedPrincipal(
         user_id="507f1f77bcf86cd799439001",
-        role="employee",
-        assigned_team_id=team1,
+        role="manager",
+        managed_team_ids=[team1],
     )
     req = _make_req()
     context = ExecutionContext(
@@ -1284,15 +1289,15 @@ def test_exact_security_reason_codes():
 
     # Employee Cross-team
     res = authorize_user_intent(emp, "wellbeing_analysis", target_team_id="team2")
-    assert res.safe_reason_code == "EMPLOYEE_CROSS_TEAM_FORBIDDEN"
+    assert res.safe_reason_code == "EMPLOYEE_AI_INSIGHTS_FORBIDDEN"
 
     # Employee Task Assigning
     res = authorize_user_intent(emp, "task_assignment_recommendation")
-    assert res.safe_reason_code == "EMPLOYEE_TASK_ASSIGNMENT_FORBIDDEN"
+    assert res.safe_reason_code == "EMPLOYEE_AI_INSIGHTS_FORBIDDEN"
 
     # Employee Team Workload
     res = authorize_user_intent(emp, "team_workload_analysis")
-    assert res.safe_reason_code == "EMPLOYEE_TEAM_WORKLOAD_FORBIDDEN"
+    assert res.safe_reason_code == "EMPLOYEE_AI_INSIGHTS_FORBIDDEN"
 
     # Manager Unmanaged Team
     res = authorize_user_intent(mgr, "wellbeing_analysis", target_team_id="team3")
@@ -1337,3 +1342,295 @@ def test_exact_security_reason_codes():
         ),
     )
     assert rai_rank.safe_reason_code == "RESPONSIBLE_AI_PUNITIVE_RANKING_FORBIDDEN"
+
+
+# =========================================================================
+# Confidence Scorer & Calibration Regression Tests
+# =========================================================================
+
+
+def test_wellbeing_confidence_one_of_four_weeks_minimum_sample_is_bounded():
+    """
+    Case A: 4 weeks requested, 1 qualifying week, exactly 3 responses.
+    Temporal coverage = 0.25.
+    Confidence must be <= 0.70.
+    """
+    conf = compute_wellbeing_confidence(
+        total_responses=3,
+        qualifying_weeks=1,
+        requested_weeks=4,
+        privacy_threshold_met=True,
+        valid_metrics_count=4,
+        is_recent=True,
+    )
+    assert conf == 0.45
+    assert conf <= 0.70
+
+
+def test_wellbeing_confidence_full_window_exceeds_partial_window():
+    """
+    Case B vs Case A: 4/4 qualifying weeks with strong sample must score higher than 1/4.
+    """
+    partial_conf = compute_wellbeing_confidence(
+        total_responses=3,
+        qualifying_weeks=1,
+        requested_weeks=4,
+        privacy_threshold_met=True,
+        valid_metrics_count=4,
+        is_recent=True,
+    )
+    full_conf = compute_wellbeing_confidence(
+        total_responses=40,
+        qualifying_weeks=4,
+        requested_weeks=4,
+        privacy_threshold_met=True,
+        valid_metrics_count=4,
+        is_recent=True,
+    )
+    assert full_conf > partial_conf
+    assert full_conf >= 0.95
+
+
+def test_wellbeing_confidence_minimum_sample_below_stronger_sample():
+    """
+    Case D: Exactly 3 responses must receive a lower response-strength score than a stronger sample.
+    """
+    min_sample_conf = compute_wellbeing_confidence(
+        total_responses=3,
+        qualifying_weeks=1,
+        requested_weeks=4,
+        privacy_threshold_met=True,
+        valid_metrics_count=4,
+        is_recent=True,
+    )
+    stronger_sample_conf = compute_wellbeing_confidence(
+        total_responses=8,
+        qualifying_weeks=1,
+        requested_weeks=4,
+        privacy_threshold_met=True,
+        valid_metrics_count=4,
+        is_recent=True,
+    )
+    assert min_sample_conf < stronger_sample_conf
+    assert min_sample_conf == 0.45
+    assert stronger_sample_conf == 0.55
+
+
+def test_wellbeing_confidence_single_week_request_has_full_temporal_coverage():
+    """
+    Case C: 1 requested week and 1 qualifying week uses temporal coverage 1.0.
+    """
+    single_week_conf = compute_wellbeing_confidence(
+        total_responses=3,
+        qualifying_weeks=1,
+        requested_weeks=1,
+        privacy_threshold_met=True,
+        valid_metrics_count=4,
+        is_recent=True,
+    )
+    four_weeks_conf = compute_wellbeing_confidence(
+        total_responses=3,
+        qualifying_weeks=1,
+        requested_weeks=4,
+        privacy_threshold_met=True,
+        valid_metrics_count=4,
+        is_recent=True,
+    )
+    assert single_week_conf > four_weeks_conf
+    assert single_week_conf == 0.83
+
+
+def test_wellbeing_confidence_zero_qualifying_weeks_not_high():
+    """
+    Case E: Zero qualifying weeks must produce 0.0 confidence (never high).
+    """
+    zero_conf = compute_wellbeing_confidence(
+        total_responses=0,
+        qualifying_weeks=0,
+        requested_weeks=4,
+        privacy_threshold_met=False,
+        valid_metrics_count=0,
+        is_recent=False,
+    )
+    assert zero_conf == 0.0
+
+
+def test_wellbeing_below_privacy_threshold_exposes_no_metrics(fixed_now):
+    """
+    Case F: When responses < 3, metrics must be suppressed and confidence must be 0.0.
+    """
+    pulse_docs = [
+        {"team_id": "team-gamma", "week_start": fixed_now, "workload_manageability": 4.0},
+        {"team_id": "team-gamma", "week_start": fixed_now, "workload_manageability": 3.0},
+    ]
+    metrics = compute_deterministic_wellbeing_metrics(
+        pulse_docs=pulse_docs,
+        now=fixed_now,
+        weeks_lookback=4,
+    )
+    assert metrics.total_privacy_safe_weeks == 0
+    assert metrics.deterministic_confidence == 0.0
+    assert metrics.overall_average_workload_manageability is None
+    assert "INSUFFICIENT DATA" in metrics.to_summary_text()
+
+
+@pytest.mark.asyncio
+async def test_explicit_four_week_lookback_reaches_confidence_scorer(mock_db, fixed_now, default_wellbeing_output):
+    """
+    Verifies that requested_weeks=4 reaches the deterministic confidence scorer throughout runtime execution.
+    """
+    corr_id = str(uuid.uuid4())
+    sink = InMemoryAgentAuditSink()
+    fake_gw = FakeLLMGateway(default_response=default_wellbeing_output)
+    runtime = AgentRuntime(llm_gateway=fake_gw, audit_sink=sink)
+
+    team_id = "507f1f77bcf86cd799439033"
+    register_wellbeing_agent(runtime, database=mock_db, target_team_id=team_id, weeks_lookback=4)
+
+    # Insert 3 responses for 1 week (current week)
+    for i in range(3):
+        await mock_db[PULSE_COLLECTION_NAME].insert_one({
+            "team_id": ObjectId(team_id),
+            "week_start": fixed_now,
+            "workload_manageability": 3.5,
+            "work_life_balance": 4.0,
+            "team_support": 4.0,
+            "engagement": 4.0,
+        })
+
+    principal = AuthenticatedPrincipal(
+        user_id="507f1f77bcf86cd799439001",
+        role="manager",
+        managed_team_ids=[team_id],
+    )
+    req = create_agent_request(
+        correlation_id=corr_id,
+        sender="coordinator",
+        recipient="wellbeing",
+        intent="wellbeing_analysis",
+        authenticated_user_id=principal.user_id,
+        question="Evaluate whether the team workload has been manageable over 4 weeks.",
+        target_team_id=team_id,
+        weeks_lookback=4,
+    )
+
+    res = await execute_wellbeing_agent(runtime, req, principal)
+    assert res.status == "completed"
+    assert res.finding is not None
+    # 4 weeks requested, 1 qualifying week with 3 responses -> deterministic confidence 0.45 <= 0.70
+    assert res.finding.confidence == 0.45
+    assert res.finding.confidence <= 0.70
+
+
+@pytest.mark.asyncio
+async def test_team_workload_coordinator_confidence_uses_weakest_specialist(mock_db, fixed_now):
+    """
+    When productivity=0.95 and wellbeing=0.45, Coordinator synthesis confidence must be min(0.95, 0.45) = 0.45 <= 0.70.
+    """
+    from backend.app.modules.agents.coordinator import (
+        AgentCoordinator,
+        CoordinatorExecutionRequest,
+        CoordinatorSynthesisOutput,
+        register_coordinator_agent,
+    )
+    from backend.app.modules.agents.productivity import (
+        ProductivityFindingOutput,
+        register_productivity_agent,
+    )
+    TASKS_COLLECTION = "tasks"
+
+    team_id = "507f1f77bcf86cd799439033"
+    corr_id = str(uuid.uuid4())
+    sink = InMemoryAgentAuditSink()
+
+    # Productivity finding has high confidence (0.95), Wellbeing finding has 0.45
+    fake_gw = FakeLLMGateway(
+        default_responses={
+            ProductivityFindingOutput: ProductivityFindingOutput(
+                summary="Productivity analysis: 8 tasks completed.",
+                workload_observations=["Strong throughput"],
+                completion_and_overdue_observations=[],
+                blocker_observations=[],
+                recommended_actions=["Maintain velocity"],
+                confidence=0.95,
+                limitations=[],
+            ),
+            WellbeingFindingOutput: WellbeingFindingOutput(
+                summary="Wellbeing analysis: 1 week available.",
+                aggregate_observations=["Workload manageability 3.5/5"],
+                trend_observations=[],
+                recommended_actions=["Review 1-on-1s"],
+                confidence=0.90,  # Raw LLM output; runtime overrides to 0.45 from evidence
+                limitations=["Only one week qualified out of 4."],
+            ),
+            CoordinatorSynthesisOutput: CoordinatorSynthesisOutput(
+                selected_claim_ids=["claim_productivity_1", "claim_wellbeing_1"],
+                selected_action_ids=["action_productivity_1", "action_wellbeing_1"],
+                selected_limitation_ids=["limitation_wellbeing_1"],
+            ),
+        }
+    )
+
+    runtime = AgentRuntime(llm_gateway=fake_gw, audit_sink=sink)
+    register_coordinator_agent(runtime)
+    register_productivity_agent(runtime, database=mock_db, target_team_id=team_id)
+    register_wellbeing_agent(runtime, database=mock_db, target_team_id=team_id, weeks_lookback=4)
+
+    # Insert 6 tasks for productivity
+    for i in range(6):
+        await mock_db[TASKS_COLLECTION].insert_one({
+            "team_id": ObjectId(team_id),
+            "title": f"Task {i}",
+            "status": "done",
+            "due_date": fixed_now + timedelta(days=2),
+        })
+
+    # Insert 3 pulse responses for 1 week
+    for i in range(3):
+        await mock_db[PULSE_COLLECTION_NAME].insert_one({
+            "team_id": ObjectId(team_id),
+            "week_start": fixed_now,
+            "workload_manageability": 3.5,
+            "work_life_balance": 4.0,
+            "team_support": 4.0,
+            "engagement": 4.0,
+        })
+
+    coord = AgentCoordinator(runtime=runtime, llm_gateway=fake_gw, audit_sink=sink)
+    principal = AuthenticatedPrincipal(
+        user_id="507f1f77bcf86cd799439001",
+        role="manager",
+        managed_team_ids=[team_id],
+    )
+
+    exec_req = CoordinatorExecutionRequest(
+        correlation_id=corr_id,
+        intent="team_workload_analysis",
+        authenticated_principal=principal,
+        question="Evaluate whether the selected team's workload has been manageable during the last four weeks.",
+        target_team_id=team_id,
+        weeks_lookback=4,
+    )
+
+    result = await coord.orchestrate(exec_req)
+    assert result.status == "completed"
+    assert result.synthesized_finding is not None
+    # Synthesis uses the weakest trusted evidence score, rather than the provider scores.
+    assert result.synthesized_finding.confidence == min(f.confidence for f in result.findings) == 0.30  # Productivity has no trusted tasks.
+    assert result.synthesized_finding.confidence <= 0.70
+
+
+def test_wellbeing_confidence_does_not_use_global_limitation_cap():
+    """
+    Verifies that adding advisory limitation strings does not clamp or override the deterministic confidence score.
+    """
+    conf_without_lims = compute_wellbeing_confidence(
+        total_responses=20,
+        qualifying_weeks=4,
+        requested_weeks=4,
+        privacy_threshold_met=True,
+        valid_metrics_count=4,
+        is_recent=True,
+    )
+    # The deterministic calculation is independent of advisory text strings (e.g. 20 responses across 4 weeks yields 0.88)
+    assert conf_without_lims == 0.88

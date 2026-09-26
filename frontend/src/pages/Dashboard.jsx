@@ -24,6 +24,7 @@ import AdminMessageAudit from "../features/collaboration/components/AdminMessage
 import EmployeePulseSurvey from "../features/pulse-surveys/components/EmployeePulseSurvey";
 import ManagerPulseInsights from "../features/pulse-surveys/components/ManagerPulseInsights";
 import AdminPulseAudit from "../features/pulse-surveys/components/AdminPulseAudit";
+import AgentWorkspace from "../features/agents/components/AgentWorkspace";
 
 import AppShell from "../layouts/AppShell";
 import PageHeader from "../layouts/PageHeader";
@@ -34,11 +35,20 @@ import Alert from "../components/ui/Alert";
 import EmptyState from "../components/ui/EmptyState";
 import { SkeletonCard, SkeletonTable } from "../components/ui/Skeleton";
 
-export default function Dashboard() {
-  const { user, token, handleSessionExpired, logout } = useAuth();
+export default function Dashboard({ initialTab = "overview", user: propUser, token: propToken } = {}) {
+  let auth = {};
+  try {
+    auth = useAuth() || {};
+  } catch {
+    auth = {};
+  }
+  const user = propUser || auth?.user;
+  const token = propToken || auth?.token;
+  const handleSessionExpired = auth?.handleSessionExpired;
+  const logout = auth?.logout;
 
   // Navigation Tab View State
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab, setActiveTab] = useState(initialTab);
 
   // Admin User Directory State
   const [usersList, setUsersList] = useState([]);
@@ -203,7 +213,11 @@ export default function Dashboard() {
   useEffect(() => {
     if (!token || !user) return;
     setIsEditingProfile(false);
-    setActiveTab("overview");
+    if (initialTab) {
+      setActiveTab(initialTab);
+    } else {
+      setActiveTab("overview");
+    }
 
     if (user.role === "admin") {
       loadAdminUsers(1);
@@ -357,6 +371,7 @@ export default function Dashboard() {
       "weekly-pulse": "Weekly Pulse Survey",
       "pulse-insights": "Team Pulse Insights",
       "pulse-audit": "Pulse Survey Audit",
+      "ai-insights": "AI Workforce Insights",
     };
     return titles[activeTab] || "Overview";
   };
@@ -592,6 +607,14 @@ export default function Dashboard() {
             onSessionExpired={handleSessionExpired}
             assignedTeam={employeeTeamSummary}
           />
+        )}
+
+        {/* AI Insights Section */}
+        {activeTab === "ai-insights" && (
+          <div className="p-8 text-center text-slate-400" data-testid="employee-ai-insights-restricted">
+            <p className="font-medium text-slate-200">Access Restricted</p>
+            <p className="text-sm mt-1">AI Insights and Coordinator workflows are restricted to managers and administrators.</p>
+          </div>
         )}
       </div>
     );
@@ -844,6 +867,15 @@ export default function Dashboard() {
             token={token}
             onSessionExpired={handleSessionExpired}
             managedTeams={managedTeams}
+          />
+        )}
+
+        {/* AI Insights Section */}
+        {activeTab === "ai-insights" && (
+          <AgentWorkspace
+            user={user}
+            token={token}
+            onSessionExpired={handleSessionExpired}
           />
         )}
       </div>
@@ -1293,6 +1325,21 @@ export default function Dashboard() {
             token={token}
             onSessionExpired={handleSessionExpired}
           />
+        )}
+
+        {/* AI Insights Section */}
+        {activeTab === "ai-insights" && user?.role !== "employee" && (
+          <AgentWorkspace
+            user={user}
+            token={token}
+            onSessionExpired={handleSessionExpired}
+          />
+        )}
+        {activeTab === "ai-insights" && user?.role === "employee" && (
+          <div className="p-8 text-center text-slate-400">
+            <p className="font-medium text-slate-200">Access Restricted</p>
+            <p className="text-sm mt-1">AI Insights and Coordinator workflows are restricted to managers and administrators.</p>
+          </div>
         )}
       </div>
     );

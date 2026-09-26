@@ -51,7 +51,7 @@ AgentIntent = Literal[
     "general_workforce_question",
 ]
 
-ResponseStatus = Literal["completed", "partial", "failed"]
+ResponseStatus = Literal["completed", "partial", "failed", "clarification_required"]
 
 # Explicitly excludes raw/individual pulse responses to preserve employee privacy
 EvidenceSourceType = Literal[
@@ -110,6 +110,217 @@ class EvidenceReference(BaseModel):
     ] | None = None
 
 
+class CandidateRecommendationItem(BaseModel):
+    """
+    Factual, ranked recommendation item for an eligible candidate.
+    Excludes private database IDs and email addresses.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    rank: int = Field(ge=1)
+    candidate_name: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+    ]
+    eligibility_status: Literal["eligible"] = "eligible"
+    recommendation_label: Literal[
+        "recommended",
+        "strong_alternative",
+        "possible_alternative",
+        "capacity_review_required",
+    ]
+    suitability_score: float = Field(ge=0.0, le=1.0)
+    required_skill_count: int = Field(ge=0)
+    matched_required_skill_count: int = Field(ge=0)
+    required_skill_coverage: float = Field(ge=0.0, le=1.0)
+    matched_skills: list[
+        Annotated[
+            str,
+            StringConstraints(strip_whitespace=True, min_length=1, max_length=50),
+        ]
+    ] = Field(default_factory=list, max_length=20)
+    missing_required_skills: list[
+        Annotated[
+            str,
+            StringConstraints(strip_whitespace=True, min_length=1, max_length=50),
+        ]
+    ] = Field(default_factory=list, max_length=20)
+    active_task_count: int | None = Field(default=None, ge=0)
+    overdue_task_count: int | None = Field(default=None, ge=0)
+    availability_status: str | None = None
+    weekly_capacity_hours: float | None = Field(default=None, ge=0, le=80)
+    workload_summary: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, max_length=300),
+    ]
+    recommendation_reason: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, max_length=500),
+    ]
+    limitations: list[
+        Annotated[
+            str,
+            StringConstraints(strip_whitespace=True, min_length=1, max_length=300),
+        ]
+    ] = Field(default_factory=list, max_length=10)
+
+    @model_validator(mode="after")
+    def validate_candidate_consistency(self) -> "CandidateRecommendationItem":
+        if self.matched_required_skill_count > self.required_skill_count:
+            raise ValueError(
+                f"matched_required_skill_count ({self.matched_required_skill_count}) "
+                f"cannot exceed required_skill_count ({self.required_skill_count})"
+            )
+        if self.required_skill_count > 0:
+            expected_coverage = round(self.matched_required_skill_count / self.required_skill_count, 4)
+            if abs(self.required_skill_coverage - expected_coverage) > 1e-3:
+                raise ValueError(
+                    f"required_skill_coverage ({self.required_skill_coverage}) does not match "
+                    f"matched/required ratio ({expected_coverage})"
+                )
+            if self.matched_required_skill_count < self.required_skill_count:
+                raise ValueError(
+                    "Eligible candidate recommendation must have matched all required skills"
+                )
+            if self.missing_required_skills:
+                raise ValueError(
+                    "Eligible candidate recommendation cannot have missing required skills"
+                )
+        return self
+
+
+class EvaluatedCandidateItem(BaseModel):
+    """
+    Factual evaluation item for an ineligible or unselected candidate.
+    Excludes private database IDs and email addresses.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    candidate_name: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+    ]
+    eligibility_status: Literal["not_eligible"] = "not_eligible"
+    required_skill_count: int = Field(ge=0)
+    matched_required_skill_count: int = Field(ge=0)
+    required_skill_coverage: float = Field(ge=0.0, le=1.0)
+    missing_required_skills: list[
+        Annotated[
+            str,
+            StringConstraints(strip_whitespace=True, min_length=1, max_length=50),
+        ]
+    ] = Field(default_factory=list, max_length=20)
+    reason: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=500),
+    ]
+
+    @model_validator(mode="after")
+    def validate_ineligible_consistency(self) -> "EvaluatedCandidateItem":
+        if self.matched_required_skill_count > self.required_skill_count:
+            raise ValueError(
+                f"matched_required_skill_count ({self.matched_required_skill_count}) "
+                f"cannot exceed required_skill_count ({self.required_skill_count})"
+            )
+        if self.required_skill_count > 0:
+            expected_coverage = round(self.matched_required_skill_count / self.required_skill_count, 4)
+            if abs(self.required_skill_coverage - expected_coverage) > 1e-3:
+                raise ValueError(
+                    f"required_skill_coverage ({self.required_skill_coverage}) does not match "
+                    f"matched/required ratio ({expected_coverage})"
+                )
+        return self
+
+
+class TaskAssignmentDetails(BaseModel):
+    """
+    Structured, deterministic candidate ranking details for Task Assignment.
+    Strictly advisory; final authority remains with the human manager.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    task_title: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=200),
+    ]
+    task_priority: str | None = None
+    task_status: str | None = None
+    current_assignee: str | None = None
+    required_skills: list[str] = Field(default_factory=list, max_length=20)
+    requested_candidate_count: int = Field(ge=1, le=5)
+    evaluated_candidate_count: int = Field(ge=0)
+    eligible_candidate_count: int = Field(ge=0)
+    candidate_recommendations: list[CandidateRecommendationItem] = Field(
+        default_factory=list, max_length=5
+    )
+    other_evaluated_candidates: list[EvaluatedCandidateItem] = Field(
+        default_factory=list, max_length=50
+    )
+    ranking_factors: list[
+        Annotated[
+            str,
+            StringConstraints(strip_whitespace=True, min_length=1, max_length=200),
+        ]
+    ] = Field(default_factory=list, max_length=10)
+    human_decision_required: Literal[True] = True
+
+    @model_validator(mode="after")
+    def validate_ranking_consistency(self) -> "TaskAssignmentDetails":
+        recs = self.candidate_recommendations
+        other = self.other_evaluated_candidates
+
+        # 1. Recommendation count <= requested count and <= 5
+        if len(recs) > self.requested_candidate_count:
+            raise ValueError(
+                f"candidate_recommendations count ({len(recs)}) exceeds "
+                f"requested_candidate_count ({self.requested_candidate_count})"
+            )
+        if len(recs) > 5:
+            raise ValueError(f"candidate_recommendations count ({len(recs)}) exceeds maximum limit of 5")
+
+        # 2. Ranks must be unique and sequential starting from 1
+        expected_ranks = list(range(1, len(recs) + 1))
+        actual_ranks = [r.rank for r in recs]
+        if actual_ranks != expected_ranks:
+            raise ValueError(
+                f"candidate_recommendations ranks must be unique and sequential starting from 1: "
+                f"expected {expected_ranks}, got {actual_ranks}"
+            )
+
+        # 3. Candidate names unique within recommendations
+        rec_names = [r.candidate_name for r in recs]
+        if len(set(rec_names)) != len(rec_names):
+            raise ValueError("Duplicate candidate names found in candidate_recommendations")
+
+        # 4. Candidate names unique within other evaluated candidates
+        other_names = [c.candidate_name for c in other]
+        if len(set(other_names)) != len(other_names):
+            raise ValueError("Duplicate candidate names found in other_evaluated_candidates")
+
+        # 5. No candidate appears in both lists
+        intersection = set(rec_names) & set(other_names)
+        if intersection:
+            raise ValueError(f"Candidates appear in both recommended and ineligible lists: {intersection}")
+
+        # 6. Consistency of eligible and evaluated counts
+        if self.eligible_candidate_count < len(recs):
+            raise ValueError(
+                f"eligible_candidate_count ({self.eligible_candidate_count}) cannot be less than "
+                f"number of candidate recommendations ({len(recs)})"
+            )
+        total_items = len(recs) + len(other)
+        if self.evaluated_candidate_count < total_items:
+            raise ValueError(
+                f"evaluated_candidate_count ({self.evaluated_candidate_count}) cannot be less than "
+                f"total items represented ({total_items})"
+            )
+
+        return self
+
+
 class AgentFinding(BaseModel):
     """
     Validated outcome produced by a specialist agent.
@@ -141,6 +352,9 @@ class AgentFinding(BaseModel):
             StringConstraints(strip_whitespace=True, min_length=1, max_length=300),
         ]
     ] = Field(default_factory=list, max_length=20)
+    task_assignment_details: TaskAssignmentDetails | None = None
+    # Server-generated provenance; excluded from the public/A2A serialized contract.
+    is_fact_grounded: bool = Field(default=False, exclude=True)
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator("correlation_id", mode="before")
@@ -154,6 +368,30 @@ class AgentFinding(BaseModel):
     @classmethod
     def validate_generated_at(cls, v):
         return _ensure_utc(v)
+
+    @model_validator(mode="before")
+    @classmethod
+    def bound_confidence_by_evidence(cls, data: Any) -> Any:
+        # Enforce that 1.0 confidence cannot be claimed when limitations exist or evidence sample is small (< 5)
+        if isinstance(data, dict):
+            ev_refs = data.get("evidence_refs") or []
+            limitations = data.get("limitations") or []
+            confidence = data.get("confidence")
+            if confidence is not None:
+                try:
+                    conf_val = float(confidence)
+                    if (len(ev_refs) < 5 or bool(limitations)) and conf_val == 1.0:
+                        data = dict(data)
+                        data["confidence"] = 0.85
+                except (ValueError, TypeError):
+                    pass
+        elif isinstance(data, BaseModel):
+            ev_count = len(getattr(data, "evidence_refs", []) or [])
+            limitations = getattr(data, "limitations", []) or []
+            conf = getattr(data, "confidence", 0.0)
+            if (ev_count < 5 or bool(limitations)) and conf == 1.0:
+                return data.model_copy(update={"confidence": 0.85})
+        return data
 
 
 class AgentRequest(BaseModel):
@@ -194,6 +432,10 @@ class AgentRequest(BaseModel):
         default_factory=list,
         max_length=20,
     )
+    target_team_id: str | None = None
+    target_task_id: str | None = None
+    weeks_lookback: int | None = None
+    workflow_intent: AgentIntent | None = Field(default=None, exclude=True)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator("message_id", mode="before")
@@ -315,6 +557,9 @@ def create_agent_request(
     conversation_id: str | None = None,
     evidence_refs: list[EvidenceReference] | None = None,
     dependency_findings: list[AgentFinding] | None = None,
+    target_team_id: str | None = None,
+    target_task_id: str | None = None,
+    weeks_lookback: int | None = None,
 ) -> AgentRequest:
     """Factory helper to construct a validated AgentRequest with server-generated IDs."""
     return AgentRequest(
@@ -328,6 +573,9 @@ def create_agent_request(
         question=question,
         evidence_refs=evidence_refs or [],
         dependency_findings=dependency_findings or [],
+        target_team_id=target_team_id,
+        target_task_id=target_task_id,
+        weeks_lookback=weeks_lookback,
     )
 
 
