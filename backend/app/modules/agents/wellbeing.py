@@ -1,3 +1,4 @@
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 import json
 import logging
@@ -11,6 +12,8 @@ from pydantic import (
     StringConstraints,
     field_validator,
 )
+
+from backend.app.modules.agents.confidence_scorer import compute_wellbeing_confidence
 
 from backend.app.modules.agents.protocol import (
     AgentFinding,
@@ -176,6 +179,40 @@ class WeeklyTeamPulseAggregate(BaseModel):
         )
 
 
+_wellbeing_metrics_context: ContextVar[dict[str, "DeterministicWellbeingMetrics"]] = ContextVar(
+    "_wellbeing_metrics_context", default={}
+)
+
+
+def cache_wellbeing_metrics(
+    correlation_id: str, metrics: "DeterministicWellbeingMetrics"
+) -> None:
+    """Stores deterministic well-being metrics in the current execution context."""
+    if not correlation_id:
+        return
+    current = dict(_wellbeing_metrics_context.get())
+    current[correlation_id] = metrics
+    _wellbeing_metrics_context.set(current)
+
+
+def get_cached_wellbeing_metrics(
+    correlation_id: str,
+) -> "DeterministicWellbeingMetrics | None":
+    """Retrieves deterministic well-being metrics for the given correlation ID."""
+    if not correlation_id:
+        return None
+    return _wellbeing_metrics_context.get().get(correlation_id)
+
+
+def clear_cached_wellbeing_metrics(correlation_id: str) -> None:
+    """Releases cached deterministic well-being metrics after execution."""
+    if not correlation_id:
+        return
+    current = dict(_wellbeing_metrics_context.get())
+    current.pop(correlation_id, None)
+    _wellbeing_metrics_context.set(current)
+
+
 class DeterministicWellbeingMetrics(BaseModel):
     """
     Comprehensive, deterministic well-being metrics computed directly in Python
@@ -198,6 +235,8 @@ class DeterministicWellbeingMetrics(BaseModel):
     overall_average_engagement: float | None = None
     invalid_rating_count: int = 0
     analyzed_team_count: int = 0
+    weeks_lookback: int = DEFAULT_WEEKS_LOOKBACK
+    deterministic_confidence: float = 0.0
     calculation_timestamp: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
@@ -461,6 +500,21 @@ def compute_deterministic_wellbeing_metrics(
     overall_ts = round(sum(safe_ts_averages) / len(safe_ts_averages), 2) if safe_ts_averages else None
     overall_eng = round(sum(safe_eng_averages) / len(safe_eng_averages), 2) if safe_eng_averages else None
 
+    # Deterministic Confidence Calculation
+    valid_metrics_count = sum(
+        1 for m in (overall_wm, overall_wlb, overall_ts, overall_eng) if m is not None
+    )
+    is_recent = any(w.is_privacy_threshold_met for w in weekly_aggregates) if weekly_aggregates else False
+
+    deterministic_conf = compute_wellbeing_confidence(
+        total_responses=total_responses,
+        qualifying_weeks=total_privacy_safe_weeks,
+        requested_weeks=bounded_lookback,
+        privacy_threshold_met=(total_privacy_safe_weeks > 0),
+        valid_metrics_count=valid_metrics_count,
+        is_recent=is_recent,
+    )
+
     return DeterministicWellbeingMetrics(
         total_responses_analyzed=total_responses,
         total_privacy_safe_weeks=total_privacy_safe_weeks,
@@ -476,6 +530,8 @@ def compute_deterministic_wellbeing_metrics(
         overall_average_engagement=overall_eng,
         invalid_rating_count=total_invalid_ratings,
         analyzed_team_count=len(distinct_teams),
+        weeks_lookback=bounded_lookback,
+        deterministic_confidence=deterministic_conf,
         calculation_timestamp=now_utc,
     )
 
@@ -576,11 +632,14 @@ class WellbeingPulseEvidenceTool(BaseAgentTool):
         # 1. Authoritative Role & Team Filtering
         filter_query: dict[str, Any] = {}
 
+        req_team_id = context.request.target_team_id or self.target_team_id
+        active_lookback = context.request.weeks_lookback or self.weeks_lookback
+
         if principal.role == "employee":
-            if self.target_team_id:
-                if principal.assigned_team_id and self.target_team_id != principal.assigned_team_id:
+            if req_team_id:
+                if principal.assigned_team_id and req_team_id != principal.assigned_team_id:
                     raise AgentAuthorizationError(
-                        message=f"Employee cannot access team '{self.target_team_id}'",
+                        message=f"Employee cannot access team '{req_team_id}'",
                         safe_reason_code="EMPLOYEE_CROSS_TEAM_FORBIDDEN",
                         safe_message="Employees cannot request analyses for teams other than their assigned team",
                     )
@@ -589,19 +648,19 @@ class WellbeingPulseEvidenceTool(BaseAgentTool):
                 # Unassigned employee safely returns empty evidence
                 return []
 
-            team_id = self.target_team_id or principal.assigned_team_id
+            team_id = req_team_id or principal.assigned_team_id
             team_oids = _normalize_team_ids([team_id])
             filter_query["team_id"] = {"$in": team_oids} if len(team_oids) > 1 else team_oids[0]
 
         elif principal.role == "manager":
-            if self.target_team_id:
-                if self.target_team_id not in principal.managed_team_ids:
+            if req_team_id:
+                if req_team_id not in principal.managed_team_ids:
                     raise AgentAuthorizationError(
-                        message=f"Manager does not manage team '{self.target_team_id}'",
+                        message=f"Manager does not manage team '{req_team_id}'",
                         safe_reason_code="MANAGER_UNMANAGED_TEAM_FORBIDDEN",
                         safe_message="Managers cannot request analyses for teams they do not manage",
                     )
-                target_teams = [self.target_team_id]
+                target_teams = [req_team_id]
             else:
                 if not principal.managed_team_ids:
                     # Manager without managed teams safely returns empty candidate set
@@ -612,8 +671,8 @@ class WellbeingPulseEvidenceTool(BaseAgentTool):
             filter_query["team_id"] = {"$in": managed_oids} if len(managed_oids) > 1 else managed_oids[0]
 
         elif principal.role == "admin":
-            if self.target_team_id:
-                admin_oids = _normalize_team_ids([self.target_team_id])
+            if req_team_id:
+                admin_oids = _normalize_team_ids([req_team_id])
                 filter_query["team_id"] = {"$in": admin_oids} if len(admin_oids) > 1 else admin_oids[0]
             else:
                 filter_query = {}
@@ -623,7 +682,7 @@ class WellbeingPulseEvidenceTool(BaseAgentTool):
         # 2. Add strict lower and upper time boundary filters
         now_utc = datetime.now(timezone.utc)
         current_ws = get_current_week_start(now_utc)
-        earliest_ws = current_ws - timedelta(weeks=max(self.weeks_lookback - 1, 0))
+        earliest_ws = current_ws - timedelta(weeks=max(active_lookback - 1, 0))
         filter_query["week_start"] = {"$gte": earliest_ws, "$lte": current_ws}
 
         # 3. Query MongoDB with STRICT minimal projection
@@ -653,7 +712,7 @@ class WellbeingPulseEvidenceTool(BaseAgentTool):
                     if self._match_doc(d, filter_query)
                 ]
         except Exception as e:
-            logger.warning("Database pulse query failed: %s", e)
+            logger.warning("Database pulse query failed: %s", type(e).__name__)
             raise AgentToolExecutionError(
                 message="Failed to query weekly pulse collection",
                 safe_reason_code="DATABASE_ERROR",
@@ -684,13 +743,15 @@ class WellbeingPulseEvidenceTool(BaseAgentTool):
             team_names_map=team_names_map,
             min_threshold=MINIMUM_PULSE_RESPONSES_THRESHOLD,
             now=now_utc,
-            weeks_lookback=self.weeks_lookback,
+            weeks_lookback=active_lookback,
         )
+        cache_wellbeing_metrics(context.correlation_id, metrics)
+        context.evidence_metrics["wellbeing"] = metrics
 
         # 6. Build structured, privacy-safe EvidenceReference records
         evidence_refs: list[EvidenceReference] = []
 
-        summary_team_id = (
+        summary_team_id = req_team_id or (
             principal.assigned_team_id
             if principal.role == "employee"
             else (

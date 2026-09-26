@@ -145,6 +145,26 @@ class DeterministicCollaborationMetrics(BaseModel):
             f"Avg Resolution Time: {avg_res_str}{invalid_note}"
         )
 
+    def to_task_summary_text(self) -> str:
+        """Render only blocker metrics computed from the explicitly selected task."""
+        if self.unresolved_blocker_count:
+            active = (
+                f"Blockers explicitly linked to the selected task: {self.unresolved_blocker_count} active, "
+                f"including {self.stale_unresolved_blocker_count} stale (older than {STALE_BLOCKER_THRESHOLD_DAYS} days)."
+            )
+        else:
+            active = "No active or stale blockers explicitly linked to the selected task were found."
+        period = f"{self.evidence_start:%Y-%m-%d UTC} to {self.evidence_end:%Y-%m-%d UTC}"
+        resolution = (
+            f"Average resolution time for those linked blockers: {self.average_resolution_hours:.1f} hours."
+            if self.average_resolution_hours is not None else
+            "Average resolution time for linked blockers could not be calculated from valid timestamp pairs."
+        )
+        return (
+            f"{active} Within {period}, {self.resolved_blocker_count} linked blocker(s) resolved. "
+            f"{resolution}"
+        )
+
 
 def compute_deterministic_collaboration_metrics(
     message_docs: list[dict],
@@ -475,8 +495,10 @@ class CollaborationMessageEvidenceTool(BaseAgentTool):
             return []
 
         # Calculate database-side lookback window boundary [evidence_start, evidence_end]
+        req_team_id = context.request.target_team_id or self.target_team_id
+        active_days = (context.request.weeks_lookback * 7) if context.request.weeks_lookback else self.lookback_days
         now_utc = self.now_fn() if self.now_fn is not None else datetime.now(timezone.utc)
-        lookback_start = now_utc - timedelta(days=self.lookback_days)
+        lookback_start = now_utc - timedelta(days=active_days)
         lookback_end = now_utc
 
         # 1. Build authoritative database query based on role, team scope, soft-deletion, and lookback
@@ -489,10 +511,10 @@ class CollaborationMessageEvidenceTool(BaseAgentTool):
         }
 
         if principal.role == "employee":
-            if self.target_team_id:
-                if principal.assigned_team_id and self.target_team_id != principal.assigned_team_id:
+            if req_team_id:
+                if principal.assigned_team_id and req_team_id != principal.assigned_team_id:
                     raise AgentAuthorizationError(
-                        message=f"Employee cannot access team '{self.target_team_id}'",
+                        message=f"Employee cannot access team '{req_team_id}'",
                         safe_reason_code="EMPLOYEE_CROSS_TEAM_FORBIDDEN",
                         safe_message="Employees cannot request analyses for teams other than their assigned team",
                     )
@@ -500,7 +522,7 @@ class CollaborationMessageEvidenceTool(BaseAgentTool):
             if not principal.assigned_team_id:
                 return []
 
-            team_id = self.target_team_id or principal.assigned_team_id
+            team_id = req_team_id or principal.assigned_team_id
             team_oids: list[Any] = []
             if ObjectId.is_valid(team_id):
                 team_oids.append(ObjectId(team_id))
@@ -510,14 +532,14 @@ class CollaborationMessageEvidenceTool(BaseAgentTool):
             filter_query["team_id"] = {"$in": team_oids} if len(team_oids) > 1 else team_oids[0]
 
         elif principal.role == "manager":
-            if self.target_team_id:
-                if self.target_team_id not in principal.managed_team_ids:
+            if req_team_id:
+                if req_team_id not in principal.managed_team_ids:
                     raise AgentAuthorizationError(
-                        message=f"Manager does not manage team '{self.target_team_id}'",
+                        message=f"Manager does not manage team '{req_team_id}'",
                         safe_reason_code="MANAGER_UNMANAGED_TEAM_FORBIDDEN",
                         safe_message="Managers cannot request analyses for teams they do not manage",
                     )
-                target_teams = [self.target_team_id]
+                target_teams = [req_team_id]
             else:
                 if not principal.managed_team_ids:
                     return []
@@ -533,15 +555,25 @@ class CollaborationMessageEvidenceTool(BaseAgentTool):
             filter_query["team_id"] = {"$in": managed_oids} if len(managed_oids) > 1 else managed_oids[0]
 
         elif principal.role == "admin":
-            if self.target_team_id:
+            if req_team_id:
                 admin_team_oids: list[Any] = []
-                if ObjectId.is_valid(self.target_team_id):
-                    admin_team_oids.append(ObjectId(self.target_team_id))
-                if self.target_team_id not in admin_team_oids:
-                    admin_team_oids.append(self.target_team_id)
+                if ObjectId.is_valid(req_team_id):
+                    admin_team_oids.append(ObjectId(req_team_id))
+                if req_team_id not in admin_team_oids:
+                    admin_team_oids.append(req_team_id)
                 filter_query["team_id"] = {"$in": admin_team_oids} if len(admin_team_oids) > 1 else admin_team_oids[0]
         else:
             return []
+
+        # Target task scope filter
+        req_task_id = context.request.target_task_id
+        if req_task_id:
+            task_oids: list[Any] = []
+            if ObjectId.is_valid(req_task_id):
+                task_oids.append(ObjectId(req_task_id))
+            if req_task_id not in task_oids:
+                task_oids.append(req_task_id)
+            filter_query["task_id"] = {"$in": task_oids} if len(task_oids) > 1 else task_oids[0]
 
         # 2. Query MongoDB collection directly with pre-filtering
         try:
@@ -559,7 +591,7 @@ class CollaborationMessageEvidenceTool(BaseAgentTool):
                     if self._match_doc(d, filter_query)
                 ]
         except Exception as e:
-            logger.warning("Database collaboration message query failed: %s", e)
+            logger.warning("Database collaboration message query failed: %s", type(e).__name__)
             raise AgentToolExecutionError(
                 message="Failed to query collaboration messages collection",
                 safe_reason_code="DATABASE_ERROR",
@@ -568,6 +600,8 @@ class CollaborationMessageEvidenceTool(BaseAgentTool):
         # In-memory defense-in-depth: strictly filter out any soft-deleted messages or messages outside lookback
         active_messages = []
         for m in message_docs:
+            if not self._match_doc(m, filter_query):
+                continue
             if m.get("is_deleted", False):
                 continue
             c_dt = _ensure_utc(m.get("created_at"))
@@ -575,6 +609,11 @@ class CollaborationMessageEvidenceTool(BaseAgentTool):
                 if c_dt < lookback_start or c_dt > lookback_end:
                     continue
             active_messages.append(m)
+
+        context.evidence_metrics["collaboration_messages"] = len(active_messages)
+        context.evidence_metrics["collaboration_timestamps"] = all(
+            _ensure_utc(m.get("created_at")) is not None for m in active_messages
+        )
 
         if not active_messages:
             return []
@@ -631,6 +670,15 @@ class CollaborationMessageEvidenceTool(BaseAgentTool):
                     return False
             elif doc_val != val and str(doc_val) != str(val):
                 return False
+        if "task_id" in filter_query:
+            val = filter_query["task_id"]
+            doc_task = doc.get("task_id")
+            if isinstance(val, dict) and "$in" in val:
+                allowed_tasks = [str(x) for x in val["$in"]] + val["$in"]
+                if doc_task not in allowed_tasks and str(doc_task) not in allowed_tasks:
+                    return False
+            elif doc_task != val and str(doc_task) != str(val):
+                return False
         return True
 
 
@@ -669,8 +717,10 @@ class CollaborationTaskBlockerEvidenceTool(BaseAgentTool):
         if self.database is None:
             return []
 
+        req_team_id = context.request.target_team_id or self.target_team_id
+        active_days = context.request.weeks_lookback * 7 if context.request.weeks_lookback else self.lookback_days
         now_utc = self.now_fn() if self.now_fn is not None else datetime.now(timezone.utc)
-        lookback_start = now_utc - timedelta(days=self.lookback_days)
+        lookback_start = now_utc - timedelta(days=active_days)
 
         # 1. Build authoritative database task filters scoped strictly by role & team
         task_filter: dict[str, Any] = {}
@@ -728,6 +778,26 @@ class CollaborationTaskBlockerEvidenceTool(BaseAgentTool):
                     admin_team_oids.append(self.target_team_id)
                 task_filter["team_id"] = {"$in": admin_team_oids} if len(admin_team_oids) > 1 else admin_team_oids[0]
 
+        if req_team_id:
+            if principal.role == "manager" and req_team_id not in principal.managed_team_ids:
+                raise AgentAuthorizationError("Unmanaged team", safe_reason_code="MANAGER_UNMANAGED_TEAM_FORBIDDEN", safe_message="Managers cannot request analyses for teams they do not manage")
+            if principal.role == "employee" and req_team_id != principal.assigned_team_id:
+                raise AgentAuthorizationError("Cross-team access", safe_reason_code="EMPLOYEE_CROSS_TEAM_FORBIDDEN", safe_message="Employees cannot request analyses for teams other than their assigned team")
+            team_ids = [req_team_id]
+            if ObjectId.is_valid(req_team_id):
+                team_ids.append(ObjectId(req_team_id))
+            task_filter["team_id"] = {"$in": team_ids}
+
+        # Target task scope filter
+        req_task_id = context.request.target_task_id
+        if req_task_id:
+            task_oids: list[Any] = []
+            if ObjectId.is_valid(req_task_id):
+                task_oids.append(ObjectId(req_task_id))
+            if req_task_id not in task_oids:
+                task_oids.append(req_task_id)
+            task_filter["_id"] = {"$in": task_oids} if len(task_oids) > 1 else task_oids[0]
+
         # 2. Strict MongoDB projection: retrieve only minimal fields required for blocker analysis
         task_projection = {
             "_id": 1,
@@ -752,7 +822,7 @@ class CollaborationTaskBlockerEvidenceTool(BaseAgentTool):
                     if self._match_doc(d, task_filter)
                 ]
         except Exception as e:
-            logger.warning("Database task/blocker query failed: %s", e)
+            logger.warning("Database task/blocker query failed: %s", type(e).__name__)
             raise AgentToolExecutionError(
                 message="Failed to query task/blocker collection",
                 safe_reason_code="DATABASE_ERROR",
@@ -761,19 +831,26 @@ class CollaborationTaskBlockerEvidenceTool(BaseAgentTool):
         # 4. In-memory blocker relevance filtering
         # Excludes tasks without blockers and without blocked status, and old resolved blockers
         relevant_task_docs = [
-            t for t in task_docs if _is_task_blocker_relevant(t, lookback_start)
+            t for t in task_docs if self._match_doc(t, task_filter) and _is_task_blocker_relevant(t, lookback_start)
         ]
 
         # 5. Compute Deterministic Blocker Metrics strictly from relevant task records
         metrics = compute_deterministic_collaboration_metrics(
             message_docs=[],
             task_docs=relevant_task_docs,
-            lookback_days=self.lookback_days,
+            lookback_days=active_days,
             now=now_utc,
         )
+        context.evidence_metrics["collaboration_blockers"] = metrics.unresolved_blocker_count + metrics.resolved_blocker_count
+        context.evidence_metrics["collaboration_blocker_timestamps"] = metrics.invalid_timestamp_count == 0
+        context.evidence_metrics["collaboration_blocker_metrics"] = metrics
+        if req_task_id:
+            # Trusted task-only facts serve both the prompt and the runtime's public
+            # findings. Neither route nor LLM prose can broaden this scope.
+            context.evidence_metrics["collaboration_task_blocker_metrics"] = metrics
 
         evidence_refs: list[EvidenceReference] = []
-        summary_team_id = (
+        summary_team_id = req_team_id or (
             principal.assigned_team_id
             if principal.role == "employee"
             else (
@@ -788,8 +865,8 @@ class CollaborationTaskBlockerEvidenceTool(BaseAgentTool):
             EvidenceReference(
                 source_type="task",
                 record_id="collaboration-metrics-summary",
-                title="Aggregated Task Blocker Metrics",
-                snippet=metrics.to_summary_text(),
+                title="Selected Task Blocker Metrics" if req_task_id else "Aggregated Task Blocker Metrics",
+                snippet=metrics.to_task_summary_text() if req_task_id else metrics.to_summary_text(),
                 team_id=summary_team_id,
             )
         )
@@ -800,6 +877,25 @@ class CollaborationTaskBlockerEvidenceTool(BaseAgentTool):
             task_id = str(doc.get("_id", "unknown"))
             team_id_str = str(doc.get("team_id", summary_team_id))
             title = str(doc.get("title", "Task Record")).strip()
+            if req_task_id:
+                # Include the same active/recent blockers used by the metric scorer,
+                # rather than historical resolutions from an otherwise relevant task.
+                scoped_blockers = []
+                completed = str(doc.get("status", "")).lower() == "completed"
+                for blocker in doc.get("blockers") or []:
+                    if not isinstance(blocker, dict):
+                        continue
+                    resolved_at = _ensure_utc(blocker.get("resolved_at"))
+                    resolved = bool(blocker.get("is_resolved", False)) or resolved_at is not None
+                    created_at = _ensure_utc(blocker.get("created_at"))
+                    if resolved:
+                        relevant_at = resolved_at or created_at
+                        if relevant_at is not None and relevant_at < lookback_start:
+                            continue
+                    elif completed:
+                        continue
+                    scoped_blockers.append(blocker)
+                doc = {**doc, "blockers": scoped_blockers}
             snippet = _format_task_blocker_snippet(doc)
 
             ref = EvidenceReference(
@@ -828,6 +924,15 @@ class CollaborationTaskBlockerEvidenceTool(BaseAgentTool):
                     return False
             elif doc_val != val and str(doc_val) != str(val):
                 return False
+        if "_id" in filter_query:
+            val = filter_query["_id"]
+            doc_id = doc.get("_id")
+            if isinstance(val, dict) and "$in" in val:
+                allowed_ids = [str(x) for x in val["$in"]] + val["$in"]
+                if doc_id not in allowed_ids and str(doc_id) not in allowed_ids:
+                    return False
+            elif doc_id != val and str(doc_id) != str(val):
+                return False
         return True
 
 
@@ -842,7 +947,8 @@ Your objective is to analyze authorized team collaboration messages and task-blo
 CRITICAL OPERATIONAL & RESPONSIBLE-AI BOUNDARIES:
 1. STRICT EVIDENCE GROUNDING:
    - Base all statements, communication observations, blocker details, and dependency risks STRICTLY on the untrusted JSON evidence provided.
-   - You MUST use the exact figures from the 'Aggregated Collaboration & Blocker Metrics' evidence for message counts, participant counts, active/stale blocker numbers, and resolution times.
+   - Use the exact figures from the blocker metrics evidence for active/stale blocker numbers and resolution times. Message observations must use only the supplied message records.
+   - 'Selected Task Blocker Metrics' describe only blockers explicitly linked to the selected task. In that scope, all summaries, limitations, and actions must concern that task; NEVER describe the evidence as aggregated metrics for the team or infer team-wide blocker/message totals.
    - Do NOT invent, assume, or hallucinate team discussions, message contents, or blockers.
    - When evidence is sparse or empty, state explicit limitations and advise gathering more data.
 
@@ -856,9 +962,11 @@ CRITICAL OPERATIONAL & RESPONSIBLE-AI BOUNDARIES:
    - NEVER perform sentiment scoring on individual employees or attribute negative collaboration metrics to named individuals.
    - Focus strictly on team communication patterns, coordination blockers, dependency bottlenecks, and constructive workflows.
 
-4. STRICT PRIVACY & WELL-BEING ISOLATION:
+4. STRICT DOMAIN SCOPE & CLAIM BOUNDARIES:
    - You do NOT have access to pulse survey responses, private pulse comments, employee profile data, or clinical records.
    - NEVER speculate on or infer employee mental health, emotional state, stress levels, burnout, medical conditions, or protected personal characteristics.
+   - You must NOT claim task completion, "effective task management", "delivery success", "productivity success", workload manageability, or "well-being status". A status inquiry does not confirm completion. You may claim only verified blocker/message-domain observations.
+   - Specific blocker causes and resolution themes have no validated sanitized-note provenance in this workflow. Do not infer an API-access or other technical cause from messages or task descriptions. Recommend reviewing documented blocker resolution steps instead.
 
 5. OUTPUT FORMAT:
    - Produce a structured JSON object conforming strictly to the requested schema.
