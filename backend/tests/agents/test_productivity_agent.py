@@ -375,7 +375,7 @@ async def test_tool_not_executed_when_tool_names_omitted(mock_db, default_produc
     runtime.register_agent(create_productivity_agent_definition())
     runtime.register_tool(tool)
 
-    principal = AuthenticatedPrincipal(user_id=emp_user_id, role="employee", assigned_team_id=team_id)
+    principal = AuthenticatedPrincipal(user_id=emp_user_id, role="manager", managed_team_ids=[team_id])
     req = _make_req(user_id=emp_user_id)
 
     # Calling raw runtime.execute_agent without tool_names
@@ -408,7 +408,7 @@ async def test_productivity_execution_helper_supplies_tool_explicitly(mock_db, d
     runtime = AgentRuntime(audit_sink=sink, llm_gateway=fake_gateway)
     register_productivity_agent(runtime, database=mock_db)
 
-    principal = AuthenticatedPrincipal(user_id=emp_user_id, role="employee", assigned_team_id=team_id)
+    principal = AuthenticatedPrincipal(user_id=emp_user_id, role="manager", managed_team_ids=[team_id])
     req = _make_req(user_id=emp_user_id)
 
     res = await execute_productivity_agent(runtime, req, principal)
@@ -752,8 +752,8 @@ async def test_database_failure_produces_sanitized_error():
 
     principal = AuthenticatedPrincipal(
         user_id="507f1f77bcf86cd799439011",
-        role="employee",
-        assigned_team_id="507f1f77bcf86cd799439033",
+        role="manager",
+        managed_team_ids=["507f1f77bcf86cd799439033"],
     )
     req = _make_req(user_id="507f1f77bcf86cd799439011")
 
@@ -795,8 +795,8 @@ async def test_prompt_injection_in_task_remains_untrusted_evidence(mock_db, defa
 
     principal = AuthenticatedPrincipal(
         user_id=emp_user_id,
-        role="employee",
-        assigned_team_id=team_id,
+        role="manager",
+        managed_team_ids=[team_id],
     )
     req = _make_req(user_id=emp_user_id)
 
@@ -848,8 +848,8 @@ async def test_prohibited_punitive_recommendation_rejected_by_runtime(mock_db):
 
     principal = AuthenticatedPrincipal(
         user_id=emp_user_id,
-        role="employee",
-        assigned_team_id=team_id,
+        role="manager",
+        managed_team_ids=[team_id],
     )
     req = _make_req(user_id=emp_user_id)
 
@@ -911,8 +911,8 @@ async def test_canonical_objectid_and_string_types_in_mongodb(mock_db):
     tool = ProductivityTaskEvidenceTool(database=mock_db)
     principal = AuthenticatedPrincipal(
         user_id=emp_user_id,
-        role="employee",
-        assigned_team_id=team_id,
+        role="manager",
+        managed_team_ids=[team_id],
     )
     req = _make_req(user_id=emp_user_id)
     context = ExecutionContext(
@@ -959,8 +959,8 @@ async def test_productivity_agent_full_end_to_end(mock_db, default_productivity_
 
     principal = AuthenticatedPrincipal(
         user_id=emp_user_id,
-        role="employee",
-        assigned_team_id=team_id,
+        role="manager",
+        managed_team_ids=[team_id],
     )
     req = _make_req(user_id=emp_user_id)
 
@@ -968,7 +968,7 @@ async def test_productivity_agent_full_end_to_end(mock_db, default_productivity_
     assert res.status == "completed"
     assert res.sender == "productivity"
     assert res.finding is not None
-    assert res.finding.confidence == 0.9
+    assert res.finding.confidence == 0.60  # One scoped task with complete dates/status.
     assert len(res.finding.evidence_refs) > 0
     assert fake_gateway.call_count == 1
     assert len(sink.events) > 0

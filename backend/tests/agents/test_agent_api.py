@@ -15,6 +15,8 @@ from backend.app.modules.agents.coordinator import (
 )
 from backend.app.modules.agents.protocol import AgentFinding
 from backend.app.modules.agents.router import (
+    AgentExecuteResponse,
+    SpecialistFindingItem,
     get_agent_coordinator,
     resolve_authenticated_principal,
 )
@@ -96,9 +98,13 @@ class MockCoordinator:
             limitations=["Based on available mock data."],
             recommended_actions=["Review sprint backlog."],
         )
+        intent = request.intent or "productivity_analysis"
         return CoordinatorExecutionResult(
             correlation_id=request.correlation_id,
-            intent=request.intent,
+            intent=intent,
+            detected_intent=intent,
+            routing_confidence=0.95,
+            consulted_specialists=["productivity"],
             status="completed",
             findings=[finding],
             synthesized_finding=finding,
@@ -117,7 +123,6 @@ def test_execute_unauthenticated_rejected(test_setup):
     resp = client.post(
         "/agents/execute",
         json={
-            "intent": "productivity_analysis",
             "question": "How is team productivity?",
         },
     )
@@ -136,7 +141,6 @@ def test_execute_invalid_token_rejected(test_setup):
         "/agents/execute",
         headers={"Authorization": "Bearer invalid.token.value"},
         json={
-            "intent": "productivity_analysis",
             "question": "How is team productivity?",
         },
     )
@@ -150,7 +154,23 @@ def test_execute_invalid_token_rejected(test_setup):
 
 def test_execute_forbids_extra_fields(test_setup):
     client, fake_db = test_setup
-    user = create_user(fake_db, email="emp@example.com", role="employee")
+    user = create_user(fake_db, email="mgr@example.com", role="manager")
+    token = make_token(user["_id"])
+
+    resp = client.post(
+        "/agents/execute",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "question": "How is team productivity?",
+            "extra_forbidden_field": "injected_value",
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_execute_forbids_client_selected_intent(test_setup):
+    client, fake_db = test_setup
+    user = create_user(fake_db, email="mgr@example.com", role="manager")
     token = make_token(user["_id"])
 
     resp = client.post(
@@ -159,7 +179,6 @@ def test_execute_forbids_extra_fields(test_setup):
         json={
             "intent": "productivity_analysis",
             "question": "How is team productivity?",
-            "extra_forbidden_field": "injected_value",
         },
     )
     assert resp.status_code == 422
@@ -167,14 +186,13 @@ def test_execute_forbids_extra_fields(test_setup):
 
 def test_execute_forbids_injected_role_or_dependencies(test_setup):
     client, fake_db = test_setup
-    user = create_user(fake_db, email="emp@example.com", role="employee")
+    user = create_user(fake_db, email="mgr@example.com", role="manager")
     token = make_token(user["_id"])
 
     resp = client.post(
         "/agents/execute",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "intent": "productivity_analysis",
             "question": "How is team productivity?",
             "role": "admin",
             "managed_team_ids": ["65f123456789012345678901"],
@@ -186,14 +204,13 @@ def test_execute_forbids_injected_role_or_dependencies(test_setup):
 
 def test_execute_invalid_uuid_correlation_id_rejected(test_setup):
     client, fake_db = test_setup
-    user = create_user(fake_db, email="emp@example.com", role="employee")
+    user = create_user(fake_db, email="mgr@example.com", role="manager")
     token = make_token(user["_id"])
 
     resp = client.post(
         "/agents/execute",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "intent": "productivity_analysis",
             "question": "How is team productivity?",
             "correlation_id": "not-a-valid-uuid",
         },
@@ -203,14 +220,13 @@ def test_execute_invalid_uuid_correlation_id_rejected(test_setup):
 
 def test_execute_empty_question_rejected(test_setup):
     client, fake_db = test_setup
-    user = create_user(fake_db, email="emp@example.com", role="employee")
+    user = create_user(fake_db, email="mgr@example.com", role="manager")
     token = make_token(user["_id"])
 
     resp = client.post(
         "/agents/execute",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "intent": "productivity_analysis",
             "question": "   ",
         },
     )
@@ -219,14 +235,13 @@ def test_execute_empty_question_rejected(test_setup):
 
 def test_execute_invalid_weeks_lookback_rejected(test_setup):
     client, fake_db = test_setup
-    user = create_user(fake_db, email="emp@example.com", role="employee")
+    user = create_user(fake_db, email="mgr@example.com", role="manager")
     token = make_token(user["_id"])
 
     resp = client.post(
         "/agents/execute",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "intent": "productivity_analysis",
             "question": "Analyze productivity.",
             "weeks_lookback": 100,
         },
@@ -275,18 +290,12 @@ def test_employee_cross_team_rejection(test_setup):
             "/agents/execute",
             headers={"Authorization": f"Bearer {token}"},
             json={
-                "intent": "productivity_analysis",
                 "question": "Check other team productivity",
                 "target_team_id": str(team2["_id"]),
             },
         )
         assert resp.status_code == 403
-        assert "outside their assigned team" in resp.json()["detail"]
-        assert len(mock_coord.invocations) == 1
-        invoked_req = mock_coord.invocations[0]
-        assert invoked_req.authenticated_principal.user_id == str(emp["_id"])
-        assert invoked_req.authenticated_principal.role == "employee"
-        assert invoked_req.authenticated_principal.assigned_team_id == str(team1["_id"])
+        assert "restricted to managers and administrators" in resp.json()["detail"]
     finally:
         app.dependency_overrides.pop(get_agent_coordinator, None)
 
@@ -302,6 +311,7 @@ def test_employee_task_assignment_forbidden(test_setup):
         result=CoordinatorExecutionResult(
             correlation_id=str(uuid.uuid4()),
             intent="task_assignment_recommendation",
+            detected_intent="task_assignment_recommendation",
             status="failed",
             errors=[{"agent": "coordinator", "error_code": "EMPLOYEE_TASK_ASSIGNMENT_FORBIDDEN", "message": "Task assignment recommendation is restricted to managers"}],
             safe_error_message="Task assignment recommendation is restricted to managers",
@@ -313,7 +323,6 @@ def test_employee_task_assignment_forbidden(test_setup):
             "/agents/execute",
             headers={"Authorization": f"Bearer {token}"},
             json={
-                "intent": "task_assignment_recommendation",
                 "question": "Recommend assignees for task 123",
                 "target_team_id": str(team["_id"]),
                 "target_task_id": "task_123",
@@ -336,6 +345,7 @@ def test_manager_unmanaged_team_rejection(test_setup):
         result=CoordinatorExecutionResult(
             correlation_id=str(uuid.uuid4()),
             intent="task_assignment_recommendation",
+            detected_intent="task_assignment_recommendation",
             status="failed",
             errors=[{"agent": "coordinator", "error_code": "MANAGER_UNMANAGED_TEAM_FORBIDDEN", "message": "Managers cannot access teams they do not manage"}],
             safe_error_message="Managers cannot access teams they do not manage",
@@ -347,7 +357,6 @@ def test_manager_unmanaged_team_rejection(test_setup):
             "/agents/execute",
             headers={"Authorization": f"Bearer {token}"},
             json={
-                "intent": "task_assignment_recommendation",
                 "question": "Assign task in team 2",
                 "target_team_id": str(team2["_id"]),
                 "target_task_id": "task_123",
@@ -383,6 +392,9 @@ def test_valid_productivity_request(test_setup):
         result=CoordinatorExecutionResult(
             correlation_id=custom_corr_id,
             intent="productivity_analysis",
+            detected_intent="productivity_analysis",
+            routing_confidence=0.92,
+            consulted_specialists=["productivity"],
             status="completed",
             findings=[mock_finding],
             synthesized_finding=mock_finding,
@@ -395,7 +407,6 @@ def test_valid_productivity_request(test_setup):
             "/agents/execute",
             headers={"Authorization": f"Bearer {token}"},
             json={
-                "intent": "productivity_analysis",
                 "question": "How is the engineering team performing?",
                 "target_team_id": str(team["_id"]),
                 "correlation_id": custom_corr_id,
@@ -404,7 +415,7 @@ def test_valid_productivity_request(test_setup):
         assert resp.status_code == 200
         data = resp.json()
         assert data["correlation_id"] == custom_corr_id
-        assert data["intent"] == "productivity_analysis"
+        assert data["detected_intent"] == "productivity_analysis"
         assert data["status"] == "completed"
         assert "Sprint velocity" in data["summary"]
         assert data["confidence"] == 0.92
@@ -446,6 +457,9 @@ def test_valid_multi_agent_request(test_setup):
         result=CoordinatorExecutionResult(
             correlation_id=corr_id,
             intent="task_delay_analysis",
+            detected_intent="task_delay_analysis",
+            routing_confidence=0.89,
+            consulted_specialists=["productivity", "collaboration"],
             status="completed",
             findings=[prod_finding, collab_finding],
             synthesized_finding=synth_finding,
@@ -458,7 +472,6 @@ def test_valid_multi_agent_request(test_setup):
             "/agents/execute",
             headers={"Authorization": f"Bearer {token}"},
             json={
-                "intent": "task_delay_analysis",
                 "question": "What is causing the delays on task 456?",
                 "target_team_id": str(team["_id"]),
                 "target_task_id": "task_456",
@@ -472,6 +485,46 @@ def test_valid_multi_agent_request(test_setup):
         assert data["findings"][0]["agent"] == "productivity"
         assert data["findings"][1]["agent"] == "collaboration"
         assert len(data["recommended_actions"]) == 1
+    finally:
+        app.dependency_overrides.pop(get_agent_coordinator, None)
+
+
+def test_clarification_required_flow_returns_200(test_setup):
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr@example.com", role="manager")
+    token = make_token(mgr["_id"])
+
+    corr_id = str(uuid.uuid4())
+    mock_coord = MockCoordinator(
+        result=CoordinatorExecutionResult(
+            correlation_id=corr_id,
+            intent=None,
+            detected_intent=None,
+            routing_confidence=0.55,
+            consulted_specialists=[],
+            clarification_question="Would you like to analyse productivity, collaboration, workload, or aggregated well-being trends?",
+            status="clarification_required",
+            findings=[],
+            synthesized_finding=None,
+            errors=[],
+            safe_error_message=None,
+        )
+    )
+    app.dependency_overrides[get_agent_coordinator] = lambda: mock_coord
+    try:
+        resp = client.post(
+            "/agents/execute",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "question": "Tell me about my team.",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "clarification_required"
+        assert data["clarification_question"] == "Would you like to analyse productivity, collaboration, workload, or aggregated well-being trends?"
+        assert data["consulted_specialists"] == []
+        assert data["findings"] == []
     finally:
         app.dependency_overrides.pop(get_agent_coordinator, None)
 
@@ -492,6 +545,9 @@ def test_partial_coordinator_result_returns_200(test_setup):
         result=CoordinatorExecutionResult(
             correlation_id=corr_id,
             intent="task_delay_analysis",
+            detected_intent="task_delay_analysis",
+            routing_confidence=0.85,
+            consulted_specialists=["productivity", "collaboration"],
             status="partial",
             findings=[prod_finding],
             synthesized_finding=prod_finding,
@@ -505,7 +561,6 @@ def test_partial_coordinator_result_returns_200(test_setup):
             "/agents/execute",
             headers={"Authorization": f"Bearer {token}"},
             json={
-                "intent": "task_delay_analysis",
                 "question": "Analyze delays",
             },
         )
@@ -515,7 +570,7 @@ def test_partial_coordinator_result_returns_200(test_setup):
         assert len(data["findings"]) == 1
         assert len(data["errors"]) == 1
         assert data["errors"][0]["agent"] == "collaboration"
-        assert data["errors"][0]["error_code"] == "EXECUTION_TIMEOUT"
+        assert data["errors"][0]["error_code"] == "specialist_unavailable"
     finally:
         app.dependency_overrides.pop(get_agent_coordinator, None)
 
@@ -534,6 +589,7 @@ def test_timeout_maps_to_504(test_setup):
         result=CoordinatorExecutionResult(
             correlation_id=str(uuid.uuid4()),
             intent="productivity_analysis",
+            detected_intent="productivity_analysis",
             status="failed",
             errors=[{"agent": "coordinator", "error_code": "EXECUTION_TIMEOUT", "message": "Multi-agent execution timed out"}],
             safe_error_message="Multi-agent execution timed out",
@@ -545,7 +601,6 @@ def test_timeout_maps_to_504(test_setup):
             "/agents/execute",
             headers={"Authorization": f"Bearer {token}"},
             json={
-                "intent": "productivity_analysis",
                 "question": "Analyze productivity",
             },
         )
@@ -564,6 +619,7 @@ def test_provider_unavailable_maps_to_503(test_setup):
         result=CoordinatorExecutionResult(
             correlation_id=str(uuid.uuid4()),
             intent="productivity_analysis",
+            detected_intent="productivity_analysis",
             status="failed",
             errors=[{"agent": "coordinator", "error_code": "LLM_PROVIDER_ERROR", "message": "LLM provider service unavailable"}],
             safe_error_message="LLM provider service unavailable",
@@ -575,7 +631,6 @@ def test_provider_unavailable_maps_to_503(test_setup):
             "/agents/execute",
             headers={"Authorization": f"Bearer {token}"},
             json={
-                "intent": "productivity_analysis",
                 "question": "Analyze productivity",
             },
         )
@@ -594,6 +649,7 @@ def test_resource_not_found_maps_to_404(test_setup):
         result=CoordinatorExecutionResult(
             correlation_id=str(uuid.uuid4()),
             intent="task_assignment_recommendation",
+            detected_intent="task_assignment_recommendation",
             status="failed",
             errors=[{"agent": "task_assigning", "error_code": "TARGET_TASK_NOT_FOUND", "message": "Target task 999 not found"}],
             safe_error_message="Target task 999 not found",
@@ -605,7 +661,6 @@ def test_resource_not_found_maps_to_404(test_setup):
             "/agents/execute",
             headers={"Authorization": f"Bearer {token}"},
             json={
-                "intent": "task_assignment_recommendation",
                 "question": "Recommend assignees for task 999",
                 "target_task_id": "999",
             },
@@ -628,7 +683,6 @@ def test_unexpected_coordinator_exception_maps_to_500(test_setup):
             "/agents/execute",
             headers={"Authorization": f"Bearer {token}"},
             json={
-                "intent": "productivity_analysis",
                 "question": "Analyze productivity",
             },
         )
@@ -660,7 +714,6 @@ def test_execute_causes_zero_database_writes(test_setup):
             "/agents/execute",
             headers={"Authorization": f"Bearer {token}"},
             json={
-                "intent": "productivity_analysis",
                 "question": "Analyze productivity",
             },
         )
@@ -684,7 +737,6 @@ def test_response_contains_no_prompts_or_raw_evidence(test_setup):
             "/agents/execute",
             headers={"Authorization": f"Bearer {token}"},
             json={
-                "intent": "productivity_analysis",
                 "question": "Analyze productivity",
             },
         )
@@ -713,16 +765,8 @@ def test_capabilities_employee_filtered(test_setup):
         "/agents/capabilities",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["role"] == "employee"
-    intents = [item["intent"] for item in data["supported_intents"]]
-    assert "productivity_analysis" in intents
-    assert "collaboration_analysis" in intents
-    assert "task_assignment_recommendation" not in intents
-    assert "team_workload_analysis" not in intents
-    assert len(data["available_specialists"]) == 4
-    assert len(data["advisory_limitations"]) > 0
+    assert resp.status_code == 403
+    assert "restricted to managers and administrators" in resp.json()["detail"]
 
 
 def test_capabilities_manager_filtered(test_setup):
@@ -773,7 +817,6 @@ def test_execute_generates_valid_correlation_id_when_omitted(test_setup):
             "/agents/execute",
             headers={"Authorization": f"Bearer {token}"},
             json={
-                "intent": "productivity_analysis",
                 "question": "Analyze productivity",
             },
         )
@@ -802,7 +845,6 @@ def test_coordinator_invoked_exactly_once(test_setup):
             "/agents/execute",
             headers={"Authorization": f"Bearer {token}"},
             json={
-                "intent": "productivity_analysis",
                 "question": "Analyze productivity",
             },
         )
@@ -821,6 +863,7 @@ def test_wellbeing_to_task_assignment_isolation(test_setup):
         result=CoordinatorExecutionResult(
             correlation_id=str(uuid.uuid4()),
             intent="task_assignment_recommendation",
+            detected_intent="task_assignment_recommendation",
             status="failed",
             errors=[{
                 "agent": "coordinator",
@@ -836,7 +879,6 @@ def test_wellbeing_to_task_assignment_isolation(test_setup):
             "/agents/execute",
             headers={"Authorization": f"Bearer {token}"},
             json={
-                "intent": "task_assignment_recommendation",
                 "question": "Recommend assignees using wellbeing scores",
                 "target_task_id": "task_123",
             },
@@ -862,7 +904,6 @@ def test_missing_llm_configuration_fails_closed_with_503(test_setup, monkeypatch
         "/agents/execute",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "intent": "productivity_analysis",
             "question": "Analyze productivity without LLM config",
         },
     )
@@ -1103,6 +1144,10 @@ def test_capabilities_match_runtime_authorization_for_all_roles(test_setup):
             "/agents/capabilities",
             headers={"Authorization": f"Bearer {token}"},
         )
+        if role == "employee":
+            assert resp.status_code == 403
+            continue
+
         assert resp.status_code == 200
         caps_data = resp.json()
         caps_intents = {item["intent"] for item in caps_data["supported_intents"]}
@@ -1116,8 +1161,412 @@ def test_capabilities_match_runtime_authorization_for_all_roles(test_setup):
 
         for intent in all_intents:
             target_team = "team_1"
-            auth_decision = authorize_user_intent(principal, intent, target_team_id=target_team)
+            auth_decision =  authorize_user_intent(principal, intent, target_team_id=target_team)
             if auth_decision.allowed:
                 assert intent in caps_intents, f"Role '{role}' authorized for '{intent}' but missing in capabilities"
             else:
                 assert intent not in caps_intents, f"Role '{role}' denied for '{intent}' but present in capabilities"
+
+
+def test_clarification_privacy_guarantee_proves_zero_evidence_collection_queries(test_setup):
+    """
+    Verifies the clarification privacy guarantee:
+    1. Authentication/principal resolution queries on users/teams are allowed.
+    2. Zero queries occur on tasks, work_profiles, messages, or weekly_pulse_surveys
+       when clarification is required.
+    """
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr_privacy@example.com", role="manager")
+    token = make_token(mgr["_id"])
+
+    # Track queries across all sensitive domain collections and real specialist collections
+    query_counters = {
+        "users": 0,
+        "teams": 0,
+        "tasks": 0,
+        "employee_profiles": 0,
+        "work_profiles": 0,
+        "collaboration_messages": 0,
+        "messages": 0,
+        "weekly_pulse_responses": 0,
+        "weekly_pulse_surveys": 0,
+    }
+
+    def wrap_collection(col_name):
+        col = fake_db[col_name]
+        orig_find = col.find
+        orig_find_one = col.find_one
+
+        def tracked_find(*args, **kwargs):
+            query_counters[col_name] += 1
+            return orig_find(*args, **kwargs)
+
+        async def tracked_find_one(*args, **kwargs):
+            query_counters[col_name] += 1
+            return await orig_find_one(*args, **kwargs)
+
+        col.find = tracked_find
+        col.find_one = tracked_find_one
+
+    for col in query_counters.keys():
+        wrap_collection(col)
+
+    corr_id = str(uuid.uuid4())
+    mock_coord = MockCoordinator(
+        result=CoordinatorExecutionResult(
+            correlation_id=corr_id,
+            intent=None,
+            detected_intent=None,
+            routing_confidence=0.5,
+            consulted_specialists=[],
+            clarification_question="Could you please clarify your workforce question?",
+            status="clarification_required",
+            findings=[],
+            synthesized_finding=None,
+            errors=[],
+            safe_error_message=None,
+        )
+    )
+    app.dependency_overrides[get_agent_coordinator] = lambda: mock_coord
+    try:
+        resp = client.post(
+            "/agents/execute",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "question": "Can you check on things?",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "clarification_required"
+
+        # Authentication/principal DB access IS allowed
+        assert query_counters["users"] > 0, "Principal resolution must access users collection"
+
+        # PROOF: Exact real evidence collections receive zero queries during clarification
+        assert query_counters["tasks"] == 0, "No tasks queries permitted during clarification"
+        assert query_counters["employee_profiles"] == 0, "No employee_profiles queries permitted during clarification"
+        assert query_counters["work_profiles"] == 0, "No candidate work_profile queries permitted during clarification"
+        assert query_counters["collaboration_messages"] == 0, "No collaboration_messages queries permitted during clarification"
+        assert query_counters["messages"] == 0, "No messages queries permitted during clarification"
+        assert query_counters["weekly_pulse_responses"] == 0, "No weekly_pulse_responses queries permitted during clarification"
+        assert query_counters["weekly_pulse_surveys"] == 0, "No weekly_pulse_surveys queries permitted during clarification"
+    finally:
+        app.dependency_overrides.pop(get_agent_coordinator, None)
+
+
+def test_agent_execute_response_intent_removed_canonical_detected_intent():
+    """
+    Verifies that the deprecated 'intent' field has been removed from AgentExecuteResponse,
+    and 'detected_intent' is the canonical public response field.
+    """
+    from backend.app.modules.agents.router import AgentExecuteResponse
+
+    now = datetime.now(timezone.utc)
+    corr = str(uuid.uuid4())
+
+    resp = AgentExecuteResponse(
+        correlation_id=corr,
+        detected_intent="productivity_analysis",
+        status="completed",
+        summary="Summary",
+        confidence=0.9,
+        executed_at=now,
+    )
+    assert resp.detected_intent == "productivity_analysis"
+    assert "intent" not in AgentExecuteResponse.model_fields
+    data = resp.model_dump()
+    assert "intent" not in data
+    assert data["detected_intent"] == "productivity_analysis"
+
+    # Attempting to supply unlisted 'intent' raises ValidationError (extra forbidden)
+    with pytest.raises(Exception):
+        AgentExecuteResponse(
+            correlation_id=corr,
+            intent="productivity_analysis",
+            detected_intent="productivity_analysis",
+            status="completed",
+            summary="Summary",
+            confidence=0.9,
+            executed_at=now,
+        )
+
+
+def test_capabilities_returns_context_requirements_per_intent(test_setup):
+    """Verifies that GET /agents/capabilities includes server-owned context_requirements."""
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr_caps_cr@example.com", role="manager")
+    token = make_token(mgr["_id"])
+
+    resp = client.get(
+        "/agents/capabilities",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "supported_intents" in data
+    assert len(data["supported_intents"]) > 0
+    for item in data["supported_intents"]:
+        assert "context_requirements" in item
+        cr = item["context_requirements"]
+        assert "team_scope" in cr
+        assert "task_scope" in cr
+        assert "weeks_lookback" in cr
+        assert cr["team_scope"] in ("required", "optional", "forbidden")
+        assert cr["task_scope"] in ("required", "optional", "forbidden")
+        assert cr["weeks_lookback"] in ("required", "optional", "forbidden")
+
+
+def test_task_delay_public_response_includes_only_productivity_and_collaboration_findings_with_count_two(test_setup):
+    """
+    Proves that for the task-delay flow:
+    - Backend AgentExecuteResponse.findings includes only Productivity and Collaboration findings;
+    - Coordinator is absent from public findings;
+    - Specialist count in findings is exactly 2;
+    - Attempting to put coordinator in public findings triggers Pydantic validation error.
+    """
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr_task_delay_exact2@example.com", role="manager")
+    team = create_team(fake_db, name="Delta Team", manager_id=mgr["_id"])
+    token = make_token(mgr["_id"])
+
+    corr_id = str(uuid.uuid4())
+    prod_finding = AgentFinding(
+        agent="productivity",
+        correlation_id=corr_id,
+        summary="Sprint throughput decreased by 25%.",
+        confidence=0.84,
+        recommended_actions=["Review task sizing."],
+    )
+    collab_finding = AgentFinding(
+        agent="collaboration",
+        correlation_id=corr_id,
+        summary="PR review wait times averaged 48 hours.",
+        confidence=0.79,
+        recommended_actions=["Introduce daily PR review blocks."],
+    )
+    synth_finding = AgentFinding(
+        agent="coordinator",
+        correlation_id=corr_id,
+        summary="Task delays stem from reduced throughput coupled with PR review latency.",
+        confidence=0.79,
+        recommended_actions=["Review task sizing.", "Introduce daily PR review blocks."],
+    )
+
+    mock_coord = MockCoordinator(
+        result=CoordinatorExecutionResult(
+            correlation_id=corr_id,
+            intent="task_delay_analysis",
+            detected_intent="task_delay_analysis",
+            routing_confidence=0.91,
+            consulted_specialists=["productivity", "collaboration"],
+            status="completed",
+            findings=[prod_finding, collab_finding],
+            synthesized_finding=synth_finding,
+            errors=[],
+        )
+    )
+    app.dependency_overrides[get_agent_coordinator] = lambda: mock_coord
+    try:
+        resp = client.post(
+            "/agents/execute",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "question": "Why are our sprint tasks being delayed?",
+                "target_team_id": str(team["_id"]),
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+
+        # 1. Specialist count is exactly 2
+        assert len(data["findings"]) == 2
+
+        # 2. Contains only productivity and collaboration
+        agents = [f["agent"] for f in data["findings"]]
+        assert set(agents) == {"productivity", "collaboration"}
+
+        # 3. Coordinator is absent from public findings
+        assert "coordinator" not in agents
+
+        # 4. Top-level summary and actions contain Coordinator synthesis
+        assert "Task delays stem from" in data["summary"]
+        assert len(data["recommended_actions"]) == 2
+
+        # 5. Public schema rejects coordinator finding
+        with pytest.raises(Exception, match="must never contain agent='coordinator'"):
+            AgentExecuteResponse(
+                correlation_id=corr_id,
+                detected_intent="task_delay_analysis",
+                routing_confidence=0.9,
+                consulted_specialists=["productivity", "collaboration"],
+                status="completed",
+                summary="Synthesis summary",
+                confidence=0.8,
+                findings=[
+                    SpecialistFindingItem(
+                        agent="coordinator",
+                        summary="Illegal coordinator finding",
+                        confidence=0.8,
+                        limitations=[],
+                        recommended_actions=[],
+                    )
+                ],
+                limitations=[],
+                recommended_actions=[],
+                errors=[],
+                executed_at=datetime.now(timezone.utc),
+            )
+    finally:
+        app.dependency_overrides.pop(get_agent_coordinator, None)
+
+
+def test_task_assignment_details_in_execute_response(test_setup):
+    client, fake_db = test_setup
+    from backend.app.modules.agents.protocol import (
+        CandidateRecommendationItem,
+        EvaluatedCandidateItem,
+        TaskAssignmentDetails,
+    )
+
+    manager = create_user(fake_db, email="manager_ta@example.com", role="manager")
+    team = create_team(fake_db, name="Task Team", manager_id=manager["_id"])
+    token = make_token(manager["_id"])
+    corr_id = str(uuid.uuid4())
+
+    task_details = TaskAssignmentDetails(
+        task_title="Deploy Microservice",
+        requested_candidate_count=2,
+        evaluated_candidate_count=3,
+        eligible_candidate_count=1,
+        candidate_recommendations=[
+            CandidateRecommendationItem(
+                rank=1,
+                candidate_name="Dinethya Edirisinghe",
+                eligibility_status="eligible",
+                recommendation_label="recommended",
+                suitability_score=0.95,
+                required_skill_count=1,
+                matched_required_skill_count=1,
+                required_skill_coverage=1.0,
+                matched_skills=["Docker"],
+                missing_required_skills=[],
+                active_task_count=1,
+                overdue_task_count=0,
+                workload_summary="1 active task(s), 0 overdue (40h/wk capacity, available)",
+                recommendation_reason="Verified match for required skill(s) [Docker]. Current active workload: 1 task(s).",
+                limitations=["Advisory recommendation only."],
+            )
+        ],
+        other_evaluated_candidates=[
+            EvaluatedCandidateItem(
+                candidate_name="Bob Developer",
+                eligibility_status="not_eligible",
+                required_skill_count=1,
+                matched_required_skill_count=0,
+                required_skill_coverage=0.0,
+                missing_required_skills=["Docker"],
+                reason="Missing verified required skills: Docker",
+            )
+        ],
+        ranking_factors=["Verified required skill coverage", "Active task workload and in-progress commitments"],
+        human_decision_required=True,
+    )
+
+    ta_finding = AgentFinding(
+        agent="task_assigning",
+        correlation_id=corr_id,
+        summary="Recommended Dinethya Edirisinghe for Deploy Microservice.",
+        confidence=0.9,
+        limitations=["Advisory only."],
+        recommended_actions=["Confirm availability."],
+        task_assignment_details=task_details,
+    )
+
+    mock_result = CoordinatorExecutionResult(
+        correlation_id=corr_id,
+        intent="task_assignment_recommendation",
+        detected_intent="task_assignment_recommendation",
+        routing_confidence=0.95,
+        consulted_specialists=["task_assigning"],
+        status="completed",
+        findings=[ta_finding],
+        synthesized_finding=ta_finding,
+        task_assignment_details=task_details,
+    )
+
+    mock_coordinator = MockCoordinator(result=mock_result)
+    app.dependency_overrides[get_agent_coordinator] = lambda: mock_coordinator
+
+    try:
+        resp = client.post(
+            "/agents/execute",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "question": "Recommend the most suitable two team members for the selected task",
+                "target_team_id": str(team["_id"]),
+                "target_task_id": "507f1f77bcf86cd799439099",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+
+        assert data["task_assignment_details"] is not None
+        details = data["task_assignment_details"]
+        assert details["task_title"] == "Deploy Microservice"
+        assert details["requested_candidate_count"] == 2
+        assert details["eligible_candidate_count"] == 1
+        assert len(details["candidate_recommendations"]) == 1
+        assert details["candidate_recommendations"][0]["candidate_name"] == "Dinethya Edirisinghe"
+        assert details["candidate_recommendations"][0]["suitability_score"] == 0.95
+        assert len(details["other_evaluated_candidates"]) == 1
+        assert details["other_evaluated_candidates"][0]["candidate_name"] == "Bob Developer"
+    finally:
+        app.dependency_overrides.pop(get_agent_coordinator, None)
+
+
+def test_task_assignment_details_is_none_for_productivity_intent(test_setup):
+    client, fake_db = test_setup
+    manager = create_user(fake_db, email="manager_prod@example.com", role="manager")
+    team = create_team(fake_db, name="Prod Team", manager_id=manager["_id"])
+    token = make_token(manager["_id"])
+    corr_id = str(uuid.uuid4())
+
+    prod_finding = AgentFinding(
+        agent="productivity",
+        correlation_id=corr_id,
+        summary="Productivity is on track.",
+        confidence=0.9,
+        limitations=[],
+        recommended_actions=[],
+    )
+
+    mock_result = CoordinatorExecutionResult(
+        correlation_id=corr_id,
+        intent="productivity_analysis",
+        detected_intent="productivity_analysis",
+        routing_confidence=0.95,
+        consulted_specialists=["productivity"],
+        status="completed",
+        findings=[prod_finding],
+        synthesized_finding=prod_finding,
+        task_assignment_details=None,
+    )
+
+    mock_coordinator = MockCoordinator(result=mock_result)
+    app.dependency_overrides[get_agent_coordinator] = lambda: mock_coordinator
+
+    try:
+        resp = client.post(
+            "/agents/execute",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "question": "Summarize sprint delivery progress",
+                "target_team_id": str(team["_id"]),
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["task_assignment_details"] is None
+    finally:
+        app.dependency_overrides.pop(get_agent_coordinator, None)

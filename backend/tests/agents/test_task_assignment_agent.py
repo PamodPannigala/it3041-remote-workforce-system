@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 import json
 import math
@@ -42,7 +43,10 @@ from backend.app.modules.agents.protocol import (
     AgentFinding,
     AgentRequest,
     AgentResponse,
+    CandidateRecommendationItem,
+    EvaluatedCandidateItem,
     EvidenceReference,
+    TaskAssignmentDetails,
     create_agent_request,
 )
 from backend.app.modules.agents.runtime import (
@@ -312,7 +316,7 @@ def test_role_authorization_policy_decisions():
     # 3. Employee -> Denied
     dec_emp = authorize_user_intent(emp, "task_assignment_recommendation")
     assert not dec_emp.allowed
-    assert dec_emp.safe_reason_code == "EMPLOYEE_TASK_ASSIGNMENT_FORBIDDEN"
+    assert dec_emp.safe_reason_code == "EMPLOYEE_AI_INSIGHTS_FORBIDDEN"
 
     # 4. Admin -> Denied (by policy design for task assigning)
     dec_adm = authorize_user_intent(adm, "task_assignment_recommendation")
@@ -361,7 +365,7 @@ def test_deterministic_task_assignment_skill_matching(fixed_now):
         now=fixed_now,
     )
 
-    assert metrics.total_eligible_candidates == 3
+    assert metrics.total_eligible_candidates == 1
     assert len(metrics.candidate_matches) == 3
 
     # Alice should be ranked #1 (100% skill match, 0 active tasks)
@@ -919,6 +923,9 @@ async def test_full_runtime_execution_manager_success(mock_db, default_task_assi
     mock_db["users"].docs = [{"_id": cand_oid, "name": "Alice", "role": "employee", "team_id": team_oid, "is_active": True}]
     mock_db["employee_profiles"].docs = [{"user_id": cand_oid, "skills": ["Python"], "availability_status": "available"}]
 
+    default_task_assignment_output = default_task_assignment_output.model_copy(update={"candidate_recommendations": [
+        CandidateRecommendationOutput(candidate_id=str(cand_oid), candidate_name="Alice", matched_skills=["Python"], rationale="Verified Python skills; capacity must be confirmed.", confidence=0.5)
+    ]})
     sink = InMemoryAgentAuditSink()
     fake_gateway = FakeLLMGateway(default_response=default_task_assignment_output)
     runtime = AgentRuntime(llm_gateway=fake_gateway, audit_sink=sink)
@@ -952,7 +959,7 @@ async def test_full_runtime_execution_employee_denied(mock_db):
 
     res = await runtime.execute_agent(req, emp_principal, tool_names=["task_assignment_evidence_task_assignment_recommendation"])
     assert res.status == "failed"
-    assert res.error_code == "EMPLOYEE_TASK_ASSIGNMENT_FORBIDDEN"
+    assert res.error_code == "EMPLOYEE_AI_INSIGHTS_FORBIDDEN"
 
 
 @pytest.mark.asyncio
@@ -1051,6 +1058,9 @@ async def test_pulse_survey_secret_markers_never_leak_in_task_assignment(mock_db
         {"team_id": team_oid, "user_id": cand_oid, "optional_comment": pulse_secret_comment, "workload_manageability": pulse_secret_score}
     ]
 
+    default_task_assignment_output = default_task_assignment_output.model_copy(update={"candidate_recommendations": [
+        CandidateRecommendationOutput(candidate_id=str(cand_oid), candidate_name="Alice", matched_skills=["Python"], rationale="Verified Python skills; capacity must be confirmed.", confidence=0.5)
+    ]})
     sink = InMemoryAgentAuditSink()
     fake_gateway = FakeLLMGateway(default_response=default_task_assignment_output)
     runtime = AgentRuntime(llm_gateway=fake_gateway, audit_sink=sink)
@@ -1624,3 +1634,771 @@ def test_grounding_validator_detects_omission_of_top_ranked_candidate(fixed_now)
     ok, err = validate_task_assignment_grounding(omitted_top_output, metrics)
     assert not ok
     assert "Candidate sequence mismatch" in err
+
+
+def test_extract_requested_candidate_count_variations():
+    from backend.app.modules.agents.task_assignment import extract_requested_candidate_count
+
+    assert extract_requested_candidate_count("Recommend the most suitable team member for this task") == 1
+    assert extract_requested_candidate_count("Recommend the most suitable two team member for the selected task") == 2
+    assert extract_requested_candidate_count("Recommend three suitable candidates") == 3
+    assert extract_requested_candidate_count("Suggest 4 eligible engineers") == 4
+    assert extract_requested_candidate_count("Recommend 5 developers") == 5
+    assert extract_requested_candidate_count("Recommend 10 team members") == 5  # Capped at 5
+    assert extract_requested_candidate_count("Who is the best candidate for this task?") == 1
+    assert extract_requested_candidate_count("Recommend suitable team members") == 3  # Default 3
+    assert extract_requested_candidate_count("Find a candidate with two years of experience in React") == 3  # Not candidate count
+
+
+def test_one_eligible_candidate_when_two_requested(fixed_now):
+    target_task = {
+        "_id": "task-docker-01",
+        "title": "Set up Docker Container",
+        "team_id": "team-gamma",
+        "required_skills": ["Docker"],
+        "status": "todo",
+    }
+    u1 = {"_id": "u-dinethya", "name": "Dinethya Edirisinghe", "role": "employee", "team_id": "team-gamma", "is_active": True}
+    u2 = {"_id": "u-pamod", "name": "Pamod P", "role": "employee", "team_id": "team-gamma", "is_active": True}
+    u3 = {"_id": "u-john", "name": "John Doe", "role": "employee", "team_id": "team-gamma", "is_active": True}
+
+    p1 = {"user_id": "u-dinethya", "skills": ["Docker", "Python"], "availability_status": "available", "weekly_capacity_hours": 40.0}
+    p2 = {"user_id": "u-pamod", "skills": ["Python", "FastAPI"], "availability_status": "available", "weekly_capacity_hours": 40.0}
+    p3 = {"user_id": "u-john", "skills": ["React"], "availability_status": "available", "weekly_capacity_hours": 40.0}
+
+    metrics = compute_deterministic_task_assignment_metrics(
+        target_task=target_task,
+        candidate_users=[u1, u2, u3],
+        candidate_profiles=[p1, p2, p3],
+        team_active_tasks=[],
+        now=fixed_now,
+        requested_candidate_count=2,
+    )
+
+    details = metrics.task_assignment_details
+    assert details is not None
+    assert details.requested_candidate_count == 2
+    assert details.evaluated_candidate_count == 3
+    assert details.eligible_candidate_count == 1
+    assert len(details.candidate_recommendations) == 1
+
+    rec = details.candidate_recommendations[0]
+    assert rec.rank == 1
+    assert rec.candidate_name == "Dinethya Edirisinghe"
+    assert rec.eligibility_status == "eligible"
+    assert rec.recommendation_label == "recommended"
+    assert rec.matched_skills == ["Docker"]
+    assert rec.missing_required_skills == []
+
+    # Ineligible candidates must be listed in other_evaluated_candidates
+    assert len(details.other_evaluated_candidates) == 2
+    ineligible_names = [item.candidate_name for item in details.other_evaluated_candidates]
+    assert "Pamod P" in ineligible_names
+    assert "John Doe" in ineligible_names
+    for item in details.other_evaluated_candidates:
+        assert item.eligibility_status == "not_eligible"
+        assert "Docker" in item.missing_required_skills
+
+
+def test_multiple_eligible_candidates_ranking_and_tie_breaking(fixed_now):
+    target_task = {
+        "_id": "task-multi-01",
+        "title": "Backend Optimization",
+        "team_id": "team-gamma",
+        "required_skills": ["Python"],
+        "status": "todo",
+    }
+    u1 = {"_id": "u-alice", "name": "Alice", "role": "employee", "team_id": "team-gamma", "is_active": True}
+    u2 = {"_id": "u-bob", "name": "Bob", "role": "employee", "team_id": "team-gamma", "is_active": True}
+    u3 = {"_id": "u-charlie", "name": "Charlie", "role": "employee", "team_id": "team-gamma", "is_active": True}
+
+    # Alice has 0 active tasks, Bob has 2 active tasks, Charlie has 0 active tasks but is on leave
+    p1 = {"user_id": "u-alice", "skills": ["Python"], "availability_status": "available", "weekly_capacity_hours": 40.0}
+    p2 = {"user_id": "u-bob", "skills": ["Python"], "availability_status": "available", "weekly_capacity_hours": 40.0}
+    p3 = {"user_id": "u-charlie", "skills": ["Python"], "availability_status": "on_leave", "weekly_capacity_hours": 40.0}
+
+    active_tasks = [
+        {"_id": "t-b1", "assigned_to": "u-bob", "team_id": "team-gamma", "status": "in_progress", "due_date": fixed_now + timedelta(days=3)},
+        {"_id": "t-b2", "assigned_to": "u-bob", "team_id": "team-gamma", "status": "todo", "due_date": fixed_now + timedelta(days=4)},
+    ]
+
+    metrics = compute_deterministic_task_assignment_metrics(
+        target_task=target_task,
+        candidate_users=[u1, u2, u3],
+        candidate_profiles=[p1, p2, p3],
+        team_active_tasks=active_tasks,
+        now=fixed_now,
+        requested_candidate_count=2,
+    )
+
+    details = metrics.task_assignment_details
+    assert details is not None
+    assert details.eligible_candidate_count == 3
+    assert len(details.candidate_recommendations) == 2  # Capped at requested 2
+
+    r1 = details.candidate_recommendations[0]
+    r2 = details.candidate_recommendations[1]
+
+    # Alice (0 tasks, available) is Rank 1
+    assert r1.rank == 1
+    assert r1.candidate_name == "Alice"
+    assert r1.recommendation_label == "recommended"
+
+    # Bob (2 tasks, available) is Rank 2
+    assert r2.rank == 2
+    assert r2.candidate_name == "Bob"
+    assert r2.recommendation_label == "strong_alternative"
+    assert r1.suitability_score >= r2.suitability_score
+
+
+def test_zero_eligible_candidates(fixed_now):
+    target_task = {
+        "_id": "task-rare-01",
+        "title": "Rust Core Engine",
+        "team_id": "team-gamma",
+        "required_skills": ["Rust", "Wasm"],
+        "status": "todo",
+    }
+    u1 = {"_id": "u-1", "name": "Alice", "role": "employee", "team_id": "team-gamma", "is_active": True}
+    p1 = {"user_id": "u-1", "skills": ["Python", "JavaScript"], "availability_status": "available", "weekly_capacity_hours": 40.0}
+
+    metrics = compute_deterministic_task_assignment_metrics(
+        target_task=target_task,
+        candidate_users=[u1],
+        candidate_profiles=[p1],
+        team_active_tasks=[],
+        now=fixed_now,
+        requested_candidate_count=2,
+    )
+
+    details = metrics.task_assignment_details
+    assert details is not None
+    assert details.eligible_candidate_count == 0
+    assert len(details.candidate_recommendations) == 0
+    assert len(details.other_evaluated_candidates) == 1
+    assert details.other_evaluated_candidates[0].candidate_name == "Alice"
+    assert details.other_evaluated_candidates[0].eligibility_status == "not_eligible"
+    assert "Rust" in details.other_evaluated_candidates[0].missing_required_skills
+
+
+def test_current_assignee_receives_no_automatic_ranking_boost(fixed_now):
+    target_task = {
+        "_id": "task-reassign-01",
+        "title": "Data Pipeline",
+        "team_id": "team-gamma",
+        "required_skills": ["Python"],
+        "assigned_to": "u-assignee",
+        "status": "todo",
+    }
+    u_assignee = {"_id": "u-assignee", "name": "Assignee Bob", "role": "employee", "team_id": "team-gamma", "is_active": True}
+    u_other = {"_id": "u-other", "name": "Other Alice", "role": "employee", "team_id": "team-gamma", "is_active": True}
+
+    # Both have identical skills and workload
+    p_assignee = {"user_id": "u-assignee", "skills": ["Python"], "availability_status": "available", "weekly_capacity_hours": 40.0}
+    p_other = {"user_id": "u-other", "skills": ["Python"], "availability_status": "available", "weekly_capacity_hours": 40.0}
+
+    metrics = compute_deterministic_task_assignment_metrics(
+        target_task=target_task,
+        candidate_users=[u_assignee, u_other],
+        candidate_profiles=[p_assignee, p_other],
+        team_active_tasks=[],
+        now=fixed_now,
+        requested_candidate_count=2,
+    )
+
+    details = metrics.task_assignment_details
+    assert details is not None
+    # Suitability scores must be equal (no bonus for existing assignee)
+    s_assignee = next(r.suitability_score for r in details.candidate_recommendations if r.candidate_name == "Assignee Bob")
+    s_other = next(r.suitability_score for r in details.candidate_recommendations if r.candidate_name == "Other Alice")
+    assert s_assignee == s_other
+
+
+def test_task_assignment_details_excludes_database_ids_and_emails(fixed_now):
+    target_task = {
+        "_id": "507f1f77bcf86cd799439099",
+        "title": "Secure Task",
+        "team_id": "507f1f77bcf86cd799439033",
+        "required_skills": ["Python"],
+        "status": "todo",
+    }
+    u1 = {"_id": "507f1f77bcf86cd799439001", "name": "Dinethya Edirisinghe", "email": "dinethya@example.com", "role": "employee", "team_id": "507f1f77bcf86cd799439033", "is_active": True}
+    p1 = {"user_id": "507f1f77bcf86cd799439001", "skills": ["Python"], "availability_status": "available", "weekly_capacity_hours": 40.0}
+
+    metrics = compute_deterministic_task_assignment_metrics(
+        target_task=target_task,
+        candidate_users=[u1],
+        candidate_profiles=[p1],
+        team_active_tasks=[],
+        now=fixed_now,
+        requested_candidate_count=1,
+    )
+
+    details = metrics.task_assignment_details
+    details_json = details.model_dump_json()
+    assert "dinethya@example.com" not in details_json
+    assert "507f1f77bcf86cd799439001" not in details_json
+
+
+def test_task_assignment_no_required_skills_returns_insufficient_requirements_advisory(fixed_now):
+    target_task = {
+        "_id": "task-no-req-skills-01",
+        "title": "General Clean Up",
+        "team_id": "team-gamma",
+        "required_skills": [],
+        "status": "todo",
+    }
+    u1 = {"_id": "u-1", "name": "Alice", "role": "employee", "team_id": "team-gamma", "is_active": True}
+    u2 = {"_id": "u-2", "name": "Bob", "role": "employee", "team_id": "team-gamma", "is_active": True}
+    p1 = {"user_id": "u-1", "skills": ["Python"], "availability_status": "available", "weekly_capacity_hours": 40.0}
+    p2 = {"user_id": "u-2", "skills": ["Docker"], "availability_status": "available", "weekly_capacity_hours": 40.0}
+
+    metrics = compute_deterministic_task_assignment_metrics(
+        target_task=target_task,
+        candidate_users=[u1, u2],
+        candidate_profiles=[p1, p2],
+        team_active_tasks=[],
+        now=fixed_now,
+        requested_candidate_count=2,
+    )
+
+    details = metrics.task_assignment_details
+    assert details is not None
+    assert details.eligible_candidate_count == 0
+    assert len(details.candidate_recommendations) == 0
+    assert len(details.other_evaluated_candidates) == 2
+    for cand in details.other_evaluated_candidates:
+        assert cand.eligibility_status == "not_eligible"
+        assert cand.required_skill_count == 0
+        assert cand.matched_required_skill_count == 0
+        assert cand.required_skill_coverage == 0.0
+        assert "Task specifies no required skills" in cand.reason
+
+    summary_text = metrics.to_summary_text()
+    assert "Task specifies no required skills" in summary_text
+    assert "manager must define task requirements" in summary_text
+
+
+def test_task_assignment_normalized_weights_without_preferred_skills(fixed_now):
+    # Task without preferred skills
+    task_no_pref = {
+        "_id": "task-req-only",
+        "title": "Core Task",
+        "team_id": "team-gamma",
+        "required_skills": ["Python"],
+        "preferred_skills": [],
+        "status": "todo",
+    }
+    u1 = {"_id": "u-1", "name": "Alice", "role": "employee", "team_id": "team-gamma", "is_active": True}
+    p1 = {"user_id": "u-1", "skills": ["Python"], "availability_status": "available", "weekly_capacity_hours": 40.0}
+
+    m_no_pref = compute_deterministic_task_assignment_metrics(
+        target_task=task_no_pref,
+        candidate_users=[u1],
+        candidate_profiles=[p1],
+        team_active_tasks=[],
+        now=fixed_now,
+        requested_candidate_count=1,
+    )
+
+    # Candidate with 100% required skill and 100% workload capacity (40h, 0 tasks)
+    # Available weight: 0.50 + 0.35 = 0.85. Normalized: 0.50/0.85 * 1.0 + 0.35/0.85 * 1.0 = 1.00
+    rec = m_no_pref.task_assignment_details.candidate_recommendations[0]
+    assert rec.suitability_score == 1.00
+
+
+@pytest.mark.asyncio
+async def test_task_assignment_cache_isolation_concurrent_executions(fixed_now):
+    from backend.app.modules.agents.task_assignment import (
+        cache_task_assignment_details,
+        get_cached_task_assignment_details,
+        clear_cached_task_assignment_details,
+    )
+
+    corr_a = "corr-mgr-a-1111"
+    corr_b = "corr-mgr-b-2222"
+
+    details_a = TaskAssignmentDetails(
+        task_title="Task for Team A",
+        requested_candidate_count=1,
+        evaluated_candidate_count=1,
+        eligible_candidate_count=1,
+        candidate_recommendations=[
+            CandidateRecommendationItem(
+                rank=1,
+                candidate_name="Alice A",
+                eligibility_status="eligible",
+                recommendation_label="recommended",
+                suitability_score=0.95,
+                required_skill_count=1,
+                matched_required_skill_count=1,
+                required_skill_coverage=1.0,
+                matched_skills=["Python"],
+                missing_required_skills=[],
+                active_task_count=0,
+                overdue_task_count=0,
+                workload_summary="0 active tasks",
+                recommendation_reason="Strong fit for Team A",
+                limitations=[],
+            )
+        ],
+        other_evaluated_candidates=[],
+        ranking_factors=["Required skills"],
+        human_decision_required=True,
+    )
+
+    details_b = TaskAssignmentDetails(
+        task_title="Task for Team B",
+        requested_candidate_count=1,
+        evaluated_candidate_count=1,
+        eligible_candidate_count=1,
+        candidate_recommendations=[
+            CandidateRecommendationItem(
+                rank=1,
+                candidate_name="Bob B",
+                eligibility_status="eligible",
+                recommendation_label="recommended",
+                suitability_score=0.90,
+                required_skill_count=1,
+                matched_required_skill_count=1,
+                required_skill_coverage=1.0,
+                matched_skills=["Go"],
+                missing_required_skills=[],
+                active_task_count=0,
+                overdue_task_count=0,
+                workload_summary="0 active tasks",
+                recommendation_reason="Strong fit for Team B",
+                limitations=[],
+            )
+        ],
+        other_evaluated_candidates=[],
+        ranking_factors=["Required skills"],
+        human_decision_required=True,
+    )
+
+    async def _worker_a():
+        cache_task_assignment_details(corr_a, details_a)
+        await asyncio.sleep(0.01)
+        res = get_cached_task_assignment_details(corr_a)
+        assert res is not None
+        assert res.task_title == "Task for Team A"
+        assert res.candidate_recommendations[0].candidate_name == "Alice A"
+        clear_cached_task_assignment_details(corr_a)
+        assert get_cached_task_assignment_details(corr_a) is None
+
+    async def _worker_b():
+        cache_task_assignment_details(corr_b, details_b)
+        await asyncio.sleep(0.01)
+        res = get_cached_task_assignment_details(corr_b)
+        assert res is not None
+        assert res.task_title == "Task for Team B"
+        assert res.candidate_recommendations[0].candidate_name == "Bob B"
+        clear_cached_task_assignment_details(corr_b)
+        assert get_cached_task_assignment_details(corr_b) is None
+
+    await asyncio.gather(_worker_a(), _worker_b())
+
+
+def test_task_assignment_details_cross_field_validation_failures():
+    # 1. Recommendation count exceeds requested count
+    with pytest.raises(ValueError, match="exceeds requested_candidate_count"):
+        TaskAssignmentDetails(
+            task_title="Test Task",
+            requested_candidate_count=1,
+            evaluated_candidate_count=2,
+            eligible_candidate_count=2,
+            candidate_recommendations=[
+                CandidateRecommendationItem(
+                    rank=1,
+                    candidate_name="Alice",
+                    eligibility_status="eligible",
+                    recommendation_label="recommended",
+                    suitability_score=0.9,
+                    required_skill_count=1,
+                    matched_required_skill_count=1,
+                    required_skill_coverage=1.0,
+                    matched_skills=["Python"],
+                    missing_required_skills=[],
+                    workload_summary="0 active",
+                    recommendation_reason="Good",
+                    limitations=[],
+                ),
+                CandidateRecommendationItem(
+                    rank=2,
+                    candidate_name="Bob",
+                    eligibility_status="eligible",
+                    recommendation_label="strong_alternative",
+                    suitability_score=0.8,
+                    required_skill_count=1,
+                    matched_required_skill_count=1,
+                    required_skill_coverage=1.0,
+                    matched_skills=["Python"],
+                    missing_required_skills=[],
+                    workload_summary="0 active",
+                    recommendation_reason="Good",
+                    limitations=[],
+                ),
+            ],
+            other_evaluated_candidates=[],
+            ranking_factors=["skills"],
+            human_decision_required=True,
+        )
+
+    # 2. Non-sequential ranks (e.g. rank 1 and rank 3)
+    with pytest.raises(ValueError, match="unique and sequential starting from 1"):
+        TaskAssignmentDetails(
+            task_title="Test Task",
+            requested_candidate_count=2,
+            evaluated_candidate_count=2,
+            eligible_candidate_count=2,
+            candidate_recommendations=[
+                CandidateRecommendationItem(
+                    rank=1,
+                    candidate_name="Alice",
+                    eligibility_status="eligible",
+                    recommendation_label="recommended",
+                    suitability_score=0.9,
+                    required_skill_count=1,
+                    matched_required_skill_count=1,
+                    required_skill_coverage=1.0,
+                    matched_skills=["Python"],
+                    missing_required_skills=[],
+                    workload_summary="0 active",
+                    recommendation_reason="Good",
+                    limitations=[],
+                ),
+                CandidateRecommendationItem(
+                    rank=3,
+                    candidate_name="Bob",
+                    eligibility_status="eligible",
+                    recommendation_label="strong_alternative",
+                    suitability_score=0.8,
+                    required_skill_count=1,
+                    matched_required_skill_count=1,
+                    required_skill_coverage=1.0,
+                    matched_skills=["Python"],
+                    missing_required_skills=[],
+                    workload_summary="0 active",
+                    recommendation_reason="Good",
+                    limitations=[],
+                ),
+            ],
+            other_evaluated_candidates=[],
+            ranking_factors=["skills"],
+            human_decision_required=True,
+        )
+
+    # 3. Duplicate candidate in recommendations
+    with pytest.raises(ValueError, match="Duplicate candidate names found"):
+        TaskAssignmentDetails(
+            task_title="Test Task",
+            requested_candidate_count=2,
+            evaluated_candidate_count=2,
+            eligible_candidate_count=2,
+            candidate_recommendations=[
+                CandidateRecommendationItem(
+                    rank=1,
+                    candidate_name="Alice",
+                    eligibility_status="eligible",
+                    recommendation_label="recommended",
+                    suitability_score=0.9,
+                    required_skill_count=1,
+                    matched_required_skill_count=1,
+                    required_skill_coverage=1.0,
+                    matched_skills=["Python"],
+                    missing_required_skills=[],
+                    workload_summary="0 active",
+                    recommendation_reason="Good",
+                    limitations=[],
+                ),
+                CandidateRecommendationItem(
+                    rank=2,
+                    candidate_name="Alice",
+                    eligibility_status="eligible",
+                    recommendation_label="strong_alternative",
+                    suitability_score=0.8,
+                    required_skill_count=1,
+                    matched_required_skill_count=1,
+                    required_skill_coverage=1.0,
+                    matched_skills=["Python"],
+                    missing_required_skills=[],
+                    workload_summary="0 active",
+                    recommendation_reason="Good",
+                    limitations=[],
+                ),
+            ],
+            other_evaluated_candidates=[],
+            ranking_factors=["skills"],
+            human_decision_required=True,
+        )
+
+    # 4. Candidate in both recommended and ineligible lists
+    with pytest.raises(ValueError, match="both recommended and ineligible lists"):
+        TaskAssignmentDetails(
+            task_title="Test Task",
+            requested_candidate_count=1,
+            evaluated_candidate_count=2,
+            eligible_candidate_count=1,
+            candidate_recommendations=[
+                CandidateRecommendationItem(
+                    rank=1,
+                    candidate_name="Alice",
+                    eligibility_status="eligible",
+                    recommendation_label="recommended",
+                    suitability_score=0.9,
+                    required_skill_count=1,
+                    matched_required_skill_count=1,
+                    required_skill_coverage=1.0,
+                    matched_skills=["Python"],
+                    missing_required_skills=[],
+                    workload_summary="0 active",
+                    recommendation_reason="Good",
+                    limitations=[],
+                ),
+            ],
+            other_evaluated_candidates=[
+                EvaluatedCandidateItem(
+                    candidate_name="Alice",
+                    eligibility_status="not_eligible",
+                    required_skill_count=1,
+                    matched_required_skill_count=0,
+                    required_skill_coverage=0.0,
+                    missing_required_skills=["Python"],
+                    reason="Missing skill",
+                ),
+            ],
+            ranking_factors=["skills"],
+            human_decision_required=True,
+        )
+
+
+def test_llm_cannot_alter_candidate_order_or_hallucinate_candidates():
+    from backend.app.modules.agents.task_assignment import (
+        validate_task_assignment_grounding,
+        CandidateRecommendationOutput,
+        TaskAssignmentFindingOutput,
+        CandidateSkillMatch,
+        CandidateWorkloadMetrics,
+    )
+
+    c1 = CandidateSkillMatch(
+        candidate_id="c-1",
+        candidate_name="Dinethya",
+        matched_skills=["Docker"],
+        missing_skills=[],
+        skill_coverage_ratio=1.0,
+        suitability_score=0.90,
+        workload=CandidateWorkloadMetrics(candidate_id="c-1", active_task_count=1),
+    )
+    c2 = CandidateSkillMatch(
+        candidate_id="c-2",
+        candidate_name="Kasun",
+        matched_skills=["Docker"],
+        missing_skills=[],
+        skill_coverage_ratio=1.0,
+        suitability_score=0.80,
+        workload=CandidateWorkloadMetrics(candidate_id="c-2", active_task_count=2),
+    )
+
+    # Valid matching sequence
+    valid_output = TaskAssignmentFindingOutput(
+        summary="Valid recommendation",
+        task_requirements=["Docker"],
+        candidate_recommendations=[
+            CandidateRecommendationOutput(
+                candidate_id="c-1",
+                candidate_name="Dinethya",
+                matched_skills=["Docker"],
+                missing_skills=[],
+                rationale="Best match",
+                confidence=0.90,
+            ),
+        ],
+        recommended_actions=["Assign"],
+        confidence=0.90,
+        limitations=[],
+    )
+    is_valid, err = validate_task_assignment_grounding(valid_output, [c1, c2])
+    assert is_valid is True
+    assert err is None
+
+    # LLM reorders candidates (Kasun first instead of Dinethya) -> fails
+    reordered_output = TaskAssignmentFindingOutput(
+        summary="Reordered recommendation",
+        task_requirements=["Docker"],
+        candidate_recommendations=[
+            CandidateRecommendationOutput(
+                candidate_id="c-2",
+                candidate_name="Kasun",
+                matched_skills=["Docker"],
+                missing_skills=[],
+                rationale="Wrong order",
+                confidence=0.80,
+            ),
+        ],
+        recommended_actions=["Assign"],
+        confidence=0.80,
+        limitations=[],
+    )
+    is_valid, err = validate_task_assignment_grounding(reordered_output, [c1, c2])
+    assert is_valid is False
+    assert "Candidate sequence mismatch" in err
+
+    # LLM hallucinates unknown candidate ID -> fails
+    hallucinated_output = TaskAssignmentFindingOutput(
+        summary="Hallucinated recommendation",
+        task_requirements=["Docker"],
+        candidate_recommendations=[
+            CandidateRecommendationOutput(
+                candidate_id="c-hallucinated",
+                candidate_name="Phantom",
+                matched_skills=["Docker"],
+                missing_skills=[],
+                rationale="Fabricated",
+                confidence=0.95,
+            ),
+        ],
+        recommended_actions=["Assign"],
+        confidence=0.95,
+        limitations=[],
+    )
+    is_valid, err = validate_task_assignment_grounding(hallucinated_output, [c1, c2])
+    assert is_valid is False
+    assert (
+        "Candidate sequence mismatch" in err
+        or "not in the authorized eligible candidates allowlist" in err
+    )
+
+
+# =========================================================================
+# Deterministic Confidence Scorer & Override Immunity Tests
+# =========================================================================
+
+
+def test_task_assignment_confidence_missing_task_uses_conservative_floor():
+    """compute_task_assignment_confidence returns conservative floor (0.30) when has_target_task is False."""
+    from backend.app.modules.agents.confidence_scorer import compute_task_assignment_confidence
+
+    conf = compute_task_assignment_confidence(
+        has_target_task=False,
+        eligible_candidates_count=5,
+        candidates_with_capacity=5,
+        candidates_with_skills=5,
+        top_suitability_score=0.95,
+        required_skills_count=3,
+    )
+    assert conf == 0.30
+
+
+def test_task_assignment_confidence_no_required_skills_uses_conservative_floor():
+    """compute_task_assignment_confidence returns conservative floor (0.30) when required_skills_count <= 0."""
+    from backend.app.modules.agents.confidence_scorer import compute_task_assignment_confidence
+
+    conf_zero = compute_task_assignment_confidence(
+        has_target_task=True,
+        eligible_candidates_count=5,
+        candidates_with_capacity=5,
+        candidates_with_skills=5,
+        top_suitability_score=0.95,
+        required_skills_count=0,
+    )
+    assert conf_zero == 0.30
+
+    conf_neg = compute_task_assignment_confidence(
+        has_target_task=True,
+        eligible_candidates_count=5,
+        candidates_with_capacity=5,
+        candidates_with_skills=5,
+        top_suitability_score=0.95,
+        required_skills_count=-1,
+    )
+    assert conf_neg == 0.30
+
+
+def test_task_assignment_confidence_zero_eligible_candidates_uses_conservative_floor():
+    """compute_task_assignment_confidence returns conservative floor (0.30) when eligible_candidates_count <= 0."""
+    from backend.app.modules.agents.confidence_scorer import compute_task_assignment_confidence
+
+    conf_zero = compute_task_assignment_confidence(
+        has_target_task=True,
+        eligible_candidates_count=0,
+        candidates_with_capacity=0,
+        candidates_with_skills=0,
+        top_suitability_score=0.0,
+        required_skills_count=2,
+    )
+    assert conf_zero == 0.30
+
+
+def test_task_assignment_confidence_verified_eligible_candidate_calculation_unchanged():
+    """compute_task_assignment_confidence computes verified calculation accurately with blending and capacity penalty."""
+    from backend.app.modules.agents.confidence_scorer import compute_task_assignment_confidence
+
+    # Full capacity and skills give 0.95; top suitability is a separate measure.
+    conf_full = compute_task_assignment_confidence(
+        has_target_task=True,
+        eligible_candidates_count=4,
+        candidates_with_capacity=4,
+        candidates_with_skills=4,
+        top_suitability_score=0.90,
+        required_skills_count=2,
+    )
+    assert conf_full == 0.95  # Suitability is excluded from evidence confidence.
+
+    # 2. Low capacity ratio (< 0.5) triggers -0.15 penalty
+    # capacity_ratio = 1/4 = 0.25 (< 0.5 -> penalty applied), skills_ratio = 4/4 = 1.0
+    # base = 0.50 + 0.25*0.25 + 0.20*1.0 = 0.50 + 0.0625 + 0.20 = 0.7625
+    # blend with top=0.80 -> 0.60*0.7625 + 0.40*0.80 = 0.4575 + 0.32 = 0.7775
+    # penalty: 0.7775 - 0.15 = 0.6275 -> rounded to 0.63
+    conf_penalized = compute_task_assignment_confidence(
+        has_target_task=True,
+        eligible_candidates_count=4,
+        candidates_with_capacity=1,
+        candidates_with_skills=4,
+        top_suitability_score=0.80,
+        required_skills_count=2,
+    )
+    assert conf_penalized == 0.61  # 0.50 + 0.25*(1/4) + 0.20 - 0.15, rounded.
+
+
+def test_llm_provided_confidence_cannot_override_deterministic_confidence():
+    """validate_task_assignment_grounding rejects LLM confidence exceeding deterministic suitability score."""
+    from backend.app.modules.agents.task_assignment import (
+        CandidateRecommendationOutput,
+        CandidateSkillMatch,
+        CandidateWorkloadMetrics,
+        TaskAssignmentFindingOutput,
+        validate_task_assignment_grounding,
+    )
+
+    c1 = CandidateSkillMatch(
+        candidate_id="c-1",
+        candidate_name="Dinethya",
+        matched_skills=["Python"],
+        missing_skills=[],
+        suitability_score=0.72,
+        workload=CandidateWorkloadMetrics(candidate_id="c-1"),
+    )
+
+    # LLM attempts to inflate candidate confidence to 0.99 (exceeding deterministic 0.72)
+    inflated_output = TaskAssignmentFindingOutput(
+        summary="Inflated confidence recommendation",
+        task_requirements=["Python"],
+        candidate_recommendations=[
+            CandidateRecommendationOutput(
+                candidate_id="c-1",
+                candidate_name="Dinethya",
+                matched_skills=["Python"],
+                missing_skills=[],
+                rationale="Inflated confidence",
+                confidence=0.99,
+            ),
+        ],
+        recommended_actions=["Assign"],
+        confidence=0.99,
+        limitations=[],
+    )
+
+    is_valid, err = validate_task_assignment_grounding(inflated_output, [c1])
+    assert is_valid is False
+    assert "exceeds deterministic suitability score" in err

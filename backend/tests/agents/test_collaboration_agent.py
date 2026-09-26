@@ -873,8 +873,8 @@ async def test_generic_execute_agent_with_no_tools_executes_zero_tools(
 
     principal = AuthenticatedPrincipal(
         user_id="507f1f77bcf86cd799439011",
-        role="employee",
-        assigned_team_id="507f1f77bcf86cd799439033",
+        role="manager",
+        managed_team_ids=["507f1f77bcf86cd799439033"],
     )
     req = _make_req()
 
@@ -916,8 +916,8 @@ async def test_execute_collaboration_agent_supplies_only_collaboration_tools(
 
     principal = AuthenticatedPrincipal(
         user_id="507f1f77bcf86cd799439011",
-        role="employee",
-        assigned_team_id=team_id,
+        role="manager",
+        managed_team_ids=[team_id],
     )
     req = _make_req()
 
@@ -936,8 +936,8 @@ async def test_unknown_tool_fails_safely(mock_db, default_collaboration_output):
 
     principal = AuthenticatedPrincipal(
         user_id="507f1f77bcf86cd799439011",
-        role="employee",
-        assigned_team_id="507f1f77bcf86cd799439033",
+        role="manager",
+        managed_team_ids=["507f1f77bcf86cd799439033"],
     )
     req = _make_req()
 
@@ -963,8 +963,8 @@ async def test_collaboration_agent_calls_llm_exactly_once(
 
     principal = AuthenticatedPrincipal(
         user_id="507f1f77bcf86cd799439011",
-        role="employee",
-        assigned_team_id="507f1f77bcf86cd799439033",
+        role="manager",
+        managed_team_ids=["507f1f77bcf86cd799439033"],
     )
     req = _make_req()
 
@@ -988,8 +988,8 @@ async def test_llm_timeout_mapped_safely(mock_db):
 
     principal = AuthenticatedPrincipal(
         user_id="507f1f77bcf86cd799439011",
-        role="employee",
-        assigned_team_id="507f1f77bcf86cd799439033",
+        role="manager",
+        managed_team_ids=["507f1f77bcf86cd799439033"],
     )
     req = _make_req()
 
@@ -1013,8 +1013,8 @@ async def test_llm_output_validation_failure_mapped_safely(mock_db):
 
     principal = AuthenticatedPrincipal(
         user_id="507f1f77bcf86cd799439011",
-        role="employee",
-        assigned_team_id="507f1f77bcf86cd799439033",
+        role="manager",
+        managed_team_ids=["507f1f77bcf86cd799439033"],
     )
     req = _make_req()
 
@@ -1066,8 +1066,8 @@ async def test_prompt_injection_in_message_remains_inert_data(mock_db):
 
     principal = AuthenticatedPrincipal(
         user_id="507f1f77bcf86cd799439011",
-        role="employee",
-        assigned_team_id=team_id,
+        role="manager",
+        managed_team_ids=[team_id],
     )
     req = _make_req()
 
@@ -1099,8 +1099,8 @@ async def test_pulse_surveys_and_database_writes_strictly_forbidden(mock_db, def
 
     principal = AuthenticatedPrincipal(
         user_id="507f1f77bcf86cd799439011",
-        role="employee",
-        assigned_team_id="507f1f77bcf86cd799439033",
+        role="manager",
+        managed_team_ids=["507f1f77bcf86cd799439033"],
     )
     req = _make_req()
 
@@ -1217,8 +1217,8 @@ async def test_audit_events_omit_raw_message_content_and_prompts(
 
     principal = AuthenticatedPrincipal(
         user_id="507f1f77bcf86cd799439011",
-        role="employee",
-        assigned_team_id="507f1f77bcf86cd799439033",
+        role="manager",
+        managed_team_ids=["507f1f77bcf86cd799439033"],
     )
     req = _make_req()
 
