@@ -522,6 +522,8 @@ def validate_dependency_flow(
     """
     Validates whether an A2A message or dependency finding flow is permitted.
     Strictly forbids Wellbeing findings from flowing into Task Assigning Agent.
+    This includes findings that carry aggregate sentiment data — sentiment is a
+    wellbeing signal and must never influence task assignment decisions.
     Strictly rejects agent impersonation.
     Strictly rejects dependency findings with a mismatched correlation_id if correlation information is represented.
     """
@@ -536,7 +538,12 @@ def validate_dependency_flow(
     if dependency_findings:
         for finding in dependency_findings:
             # 1. Reject Wellbeing findings flowing to Task Assigning
-            if recipient == "task_assigning" and finding.agent == "wellbeing":
+            carries_sentiment = any((
+                finding.sentiment_score is not None,
+                finding.sentiment_label is not None,
+                finding.sentiment_qualifying_comment_count is not None,
+            ))
+            if recipient == "task_assigning" and (finding.agent == "wellbeing" or carries_sentiment):
                 return AuthorizationDecision(
                     allowed=False,
                     safe_reason_code="WELLBEING_TASK_ASSIGNMENT_FORBIDDEN",
@@ -659,13 +666,22 @@ def validate_responsible_ai_guardrails(
     Enforces Responsible AI boundaries:
     - Task assignment recommendations are strictly advisory and require human confirmation.
     - Prohibits medical diagnoses, punitive employee rankings, and wellbeing-influenced assignments.
+    - Sentiment data produced by the Wellbeing Agent is treated identically to numeric wellbeing
+      metrics: findings carrying sentiment must never flow into task assignment decisions.
     - Requires evidence references or explicit limitations when evidence is insufficient.
     """
     # 1. Task Assigning Boundaries
     if agent == "task_assigning" or intent == "task_assignment_recommendation":
         if dependency_findings:
             for dep in dependency_findings:
-                if dep.agent == "wellbeing":
+                # Wellbeing findings — including those carrying aggregate sentiment data —
+                # are unconditionally blocked from influencing task assignment.
+                carries_sentiment = any((
+                    dep.sentiment_score is not None,
+                    dep.sentiment_label is not None,
+                    dep.sentiment_qualifying_comment_count is not None,
+                ))
+                if dep.agent == "wellbeing" or carries_sentiment:
                     return AuthorizationDecision(
                         allowed=False,
                         safe_reason_code="RESPONSIBLE_AI_WELLBEING_LEAKAGE",
@@ -729,6 +745,11 @@ def validate_responsible_ai_guardrails(
                 "burnout",
                 "burned out",
                 "mental health condition",
+                # Sentiment-specific: guard against using aggregate sentiment as a
+                # clinical proxy (e.g. "sentiment indicates the team is depressed").
+                "sentiment indicates burnout",
+                "sentiment diagnos",
+                "sentiment suggests clinical",
             ]
             sentences = re.split(r"[.!?;\n]+", combined_text)
             for sentence in sentences:

@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import logging
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -27,6 +28,8 @@ from backend.app.modules.information_retrieval.router import (
 from backend.app.modules.agents.router import router as agents_router
 from backend.app.modules.agents.coordinator import create_production_coordinator
 from backend.app.modules.agents.llm_gateway import LLMConfigurationError
+
+logger = logging.getLogger(__name__)
 
 
 

@@ -14,6 +14,7 @@ from backend.app.modules.agents.llm_gateway import (
     LLMTimeoutError,
     LLMUnavailableError,
 )
+from backend.app.modules.agents import wellbeing_sentiment as sentiment_module
 from backend.app.modules.pulse_surveys.constants import (
     MINIMUM_AGGREGATE_RESPONSES,
     PULSE_COLLECTION_NAME,
@@ -35,6 +36,7 @@ from backend.app.modules.agents.wellbeing import (
     WellbeingPulseEvidenceTool,
     _ensure_utc,
     _parse_rating_value,
+    compute_team_sentiment,
     compute_deterministic_wellbeing_metrics,
     create_wellbeing_agent_definition,
     create_wellbeing_pulse_evidence_tool,
@@ -478,6 +480,187 @@ def test_per_metric_privacy_thresholding_mixed_valid_invalid():
     assert agg.average_engagement is None
 
 
+def test_compute_team_sentiment_averages_compound_scores(monkeypatch):
+    class StubAnalyzer:
+        def polarity_scores(self, comment):
+            return {"compound": {"good": 0.8, "mixed": -0.2, "soft": 0.1}[comment]}
+
+    monkeypatch.setattr(sentiment_module, "_get_analyzer", lambda: StubAnalyzer())
+
+    result = compute_team_sentiment(["good", "mixed", "soft"])
+
+    assert result.average_compound == 0.23
+    assert result.label == "Positive"
+    assert result.qualifying_comment_count == MINIMUM_PULSE_RESPONSES_THRESHOLD
+
+
+def test_compute_team_sentiment_empty_comments_is_suppressed(monkeypatch):
+    class StubAnalyzer:
+        def polarity_scores(self, comment):
+            raise AssertionError("No comments should be analyzed")
+
+    monkeypatch.setattr(sentiment_module, "_get_analyzer", lambda: StubAnalyzer())
+
+    result = compute_team_sentiment([])
+
+    assert result.average_compound is None
+    assert result.label is None
+    assert result.qualifying_comment_count == 0
+
+
+def test_comment_sentiment_k_anonymity_suppresses_count_and_score():
+    ws = datetime(2026, 9, 21, 0, 0, 0, tzinfo=timezone.utc)
+    docs = [
+        {"team_id": "teamA", "week_start": ws, "workload_manageability": 4,
+         "work_life_balance": 4, "team_support": 4, "engagement": 4,
+         "optional_comment": comment}
+        for comment in ("PRIVATE_COMMENT_ONE", "PRIVATE_COMMENT_TWO", None)
+    ]
+
+    metrics = compute_deterministic_wellbeing_metrics(docs, min_threshold=3, now=ws)
+    aggregate = metrics.weekly_aggregates[0]
+
+    assert aggregate.sentiment_score is None
+    assert aggregate.sentiment_label is None
+    assert aggregate.sentiment_qualifying_count is None
+    summary = aggregate.to_summary_text()
+    assert "Not enough data" in summary
+    assert "PRIVATE_COMMENT" not in summary
+    assert "2 of 3" not in summary
+
+
+def test_comment_sentiment_at_threshold_exposes_only_aggregate(monkeypatch):
+    class StubAnalyzer:
+        def polarity_scores(self, comment):
+            return {"compound": {"PRIVATE_COMMENT_A": 0.8,
+                                  "PRIVATE_COMMENT_B": -0.2,
+                                  "PRIVATE_COMMENT_C": 0.1}[comment]}
+
+    monkeypatch.setattr(sentiment_module, "_get_analyzer", lambda: StubAnalyzer())
+    ws = datetime(2026, 9, 21, 0, 0, 0, tzinfo=timezone.utc)
+    docs = [
+        {"team_id": "teamA", "week_start": ws, "workload_manageability": 4,
+         "work_life_balance": 4, "team_support": 4, "engagement": 4,
+         "optional_comment": comment}
+        for comment in ("PRIVATE_COMMENT_A", "PRIVATE_COMMENT_B", "PRIVATE_COMMENT_C")
+    ]
+
+    aggregate = compute_deterministic_wellbeing_metrics(docs, min_threshold=3, now=ws).weekly_aggregates[0]
+    serialized = aggregate.model_dump_json()
+
+    assert aggregate.sentiment_score == 0.23
+    assert aggregate.sentiment_label == "Positive"
+    assert aggregate.sentiment_qualifying_count == 3
+    assert "PRIVATE_COMMENT" not in serialized
+    assert "0.8" not in serialized
+    assert "-0.2" not in serialized
+
+
+def test_qualified_sentiment_is_summarized_when_numeric_metrics_are_suppressed(monkeypatch):
+    class StubAnalyzer:
+        def polarity_scores(self, comment):
+            return {"compound": 0.4}
+
+    monkeypatch.setattr(sentiment_module, "_get_analyzer", lambda: StubAnalyzer())
+    ws = datetime(2026, 9, 21, 0, 0, 0, tzinfo=timezone.utc)
+    docs = [
+        {"team_id": "teamA", "week_start": ws, "workload_manageability": "bad",
+         "work_life_balance": None, "team_support": None, "engagement": None,
+         "optional_comment": f"PRIVATE_COMMENT_{index}"}
+        for index in range(3)
+    ]
+
+    aggregate = compute_deterministic_wellbeing_metrics(docs, min_threshold=3, now=ws).weekly_aggregates[0]
+    summary = aggregate.to_summary_text()
+
+    assert aggregate.average_workload_manageability is None
+    assert aggregate.sentiment_score == 0.4
+    assert "numeric metrics suppressed" in summary
+    assert "Sentiment: Positive (+0.40), based on 3 qualifying comments" in summary
+    assert "PRIVATE_COMMENT" not in summary
+
+
+def test_vader_failure_excludes_only_failed_comment(monkeypatch):
+    class StubAnalyzer:
+        def polarity_scores(self, comment):
+            if comment == "FAIL_ANALYSIS":
+                raise ValueError("simulated failure")
+            return {"compound": {"one": 0.6, "two": 0.2, "three": 0.4}[comment]}
+
+    monkeypatch.setattr(sentiment_module, "_get_analyzer", lambda: StubAnalyzer())
+    ws = datetime(2026, 9, 21, 0, 0, 0, tzinfo=timezone.utc)
+    comments = ["one", "two", "three", "FAIL_ANALYSIS"]
+    docs = [
+        {"team_id": "teamA", "week_start": ws, "workload_manageability": 4,
+         "work_life_balance": 4, "team_support": 4, "engagement": 4,
+         "optional_comment": comment}
+        for comment in comments
+    ]
+
+    aggregate = compute_deterministic_wellbeing_metrics(docs, min_threshold=3, now=ws).weekly_aggregates[0]
+
+    assert aggregate.sentiment_score == 0.4
+    assert aggregate.sentiment_qualifying_count == 3
+
+
+@pytest.mark.asyncio
+async def test_llm_prompt_contains_aggregate_sentiment_not_comments_or_individual_scores(
+    mock_db, monkeypatch
+):
+    class StubAnalyzer:
+        def polarity_scores(self, comment):
+            return {"compound": {"RAW_COMMENT_A": 0.91,
+                                  "RAW_COMMENT_B": 0.81,
+                                  "RAW_COMMENT_C": 0.04}[comment]}
+
+    monkeypatch.setattr(sentiment_module, "_get_analyzer", lambda: StubAnalyzer())
+    captured_prompts = []
+
+    async def capture_prompt(system_prompt, user_prompt, response_model, correlation_id):
+        captured_prompts.append(user_prompt)
+        return WellbeingFindingOutput(
+            summary="Aggregate team signals reviewed.", confidence=0.9
+        )
+
+    team_id = "507f1f77bcf86cd799439033"
+    ws = datetime(2026, 9, 21, 0, 0, 0, tzinfo=timezone.utc)
+    mock_db["weekly_pulse_responses"].docs = [
+        {"team_id": ObjectId(team_id), "week_start": ws,
+         "workload_manageability": 4, "work_life_balance": 4,
+         "team_support": 4, "engagement": 4, "optional_comment": comment}
+        for comment in ("RAW_COMMENT_A", "RAW_COMMENT_B", "RAW_COMMENT_C")
+    ]
+    runtime = AgentRuntime(llm_gateway=FakeLLMGateway(handler=capture_prompt))
+    register_wellbeing_agent(runtime, database=mock_db)
+    principal = AuthenticatedPrincipal(
+        user_id="507f1f77bcf86cd799439001",
+        role="manager",
+        managed_team_ids=[team_id],
+    )
+
+    response = await execute_wellbeing_agent(runtime, _make_req(), principal)
+
+    assert response.status == "completed"
+    public_finding = json.dumps(response.finding.model_dump(), default=str)
+    assert "Positive (+0.59)" in public_finding
+    assert "RAW_COMMENT_A" not in public_finding
+    assert "RAW_COMMENT_B" not in public_finding
+    assert "RAW_COMMENT_C" not in public_finding
+    assert "+0.91" not in public_finding
+    assert "+0.81" not in public_finding
+    assert response.finding.sentiment_score == 0.59
+    assert response.finding.sentiment_label == "Positive"
+    assert response.finding.sentiment_qualifying_comment_count == 3
+    assert len(captured_prompts) == 1
+    prompt = captured_prompts[0]
+    assert "Sentiment: Positive (+0.59), based on 3 qualifying comments" in prompt
+    assert "RAW_COMMENT_A" not in prompt
+    assert "RAW_COMMENT_B" not in prompt
+    assert "RAW_COMMENT_C" not in prompt
+    assert "+0.91" not in prompt
+    assert "+0.81" not in prompt
+
+
 def test_week_to_week_trend_requires_both_weeks_safe_per_metric():
     """Verify that week-to-week delta is computed only when both weeks have privacy-safe values for that specific metric."""
     ws_w1 = datetime(2026, 9, 14, 0, 0, 0, tzinfo=timezone.utc)
@@ -805,6 +988,38 @@ def test_wellbeing_to_task_assignment_dependency_flow_strictly_rejected():
         intent="task_assignment_recommendation",
         dependency_findings=[wellbeing_finding],
     )
+    assert rai_decision.allowed is False
+    assert rai_decision.safe_reason_code == "RESPONSIBLE_AI_WELLBEING_LEAKAGE"
+
+
+def test_sentiment_bearing_wellbeing_finding_is_blocked_from_task_assignment():
+    corr_id = str(uuid.uuid4())
+    sentiment_finding = AgentFinding(
+        agent="productivity",
+        summary="Team sentiment is Positive (+0.60), based on 3 qualifying comments.",
+        confidence=0.9,
+        limitations=[],
+        recommended_actions=[],
+        correlation_id=corr_id,
+        sentiment_score=0.6,
+        sentiment_label="Positive",
+        sentiment_qualifying_comment_count=3,
+    )
+
+    flow_decision = validate_dependency_flow(
+        sender="coordinator",
+        recipient="task_assigning",
+        dependency_findings=[sentiment_finding],
+        expected_correlation_id=corr_id,
+    )
+    rai_decision = validate_responsible_ai_guardrails(
+        agent="task_assigning",
+        intent="task_assignment_recommendation",
+        dependency_findings=[sentiment_finding],
+    )
+
+    assert flow_decision.allowed is False
+    assert flow_decision.safe_reason_code == "WELLBEING_TASK_ASSIGNMENT_FORBIDDEN"
     assert rai_decision.allowed is False
     assert rai_decision.safe_reason_code == "RESPONSIBLE_AI_WELLBEING_LEAKAGE"
 

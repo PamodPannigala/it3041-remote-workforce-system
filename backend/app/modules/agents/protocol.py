@@ -352,6 +352,9 @@ class AgentFinding(BaseModel):
             StringConstraints(strip_whitespace=True, min_length=1, max_length=300),
         ]
     ] = Field(default_factory=list, max_length=20)
+    sentiment_score: float | None = Field(default=None, ge=-1.0, le=1.0)
+    sentiment_label: Literal["Positive", "Neutral", "Negative"] | None = None
+    sentiment_qualifying_comment_count: int | None = Field(default=None, ge=0)
     task_assignment_details: TaskAssignmentDetails | None = None
     # Server-generated provenance; excluded from the public/A2A serialized contract.
     is_fact_grounded: bool = Field(default=False, exclude=True)
