@@ -213,26 +213,26 @@ export default function Sidebar({
   const currentNav = navItemsByRole[role] || navItemsByRole.employee;
 
   const activeStylesByRole = {
-    employee: "bg-blue-600 text-white font-semibold shadow-md shadow-blue-500/25",
-    manager: "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/25",
-    admin: "bg-violet-600 text-white font-semibold shadow-md shadow-violet-500/25",
+    employee: "bg-blue-600 text-white border border-blue-500 font-semibold shadow-sm shadow-blue-950/20",
+    manager: "bg-amber-400 text-slate-950 border border-amber-300 font-semibold shadow-sm shadow-amber-950/20",
+    admin: "bg-violet-600 text-white border border-violet-500 font-semibold shadow-sm shadow-violet-950/20",
   };
 
   const activeStyle = activeStylesByRole[role] || activeStylesByRole.employee;
 
   return (
     <aside
-      className={`w-64 bg-[#0F172A] border-r border-slate-800 flex flex-col justify-between shrink-0 h-screen ${className}`}
+      className={`w-64 bg-[#111827] border-r border-slate-700/70 flex flex-col justify-between shrink-0 h-screen ${className}`}
     >
       {/* Top Section */}
       <div className="flex flex-col flex-1 min-h-0">
         {/* Brand Header */}
-        <div className="p-5 border-b border-slate-800/80 shrink-0">
+        <div className="p-5 border-b border-slate-700/70 shrink-0">
           <BrandLogo subtitle="System" dark={true} />
         </div>
 
         {/* Role Workspace Banner */}
-        <div className="px-4 py-3 mx-4 mt-4 rounded-xl bg-[#172033] border border-slate-800 flex items-center justify-between shrink-0">
+        <div className="px-4 py-3 mx-4 mt-4 rounded-lg bg-slate-800/70 border border-slate-700/80 flex items-center justify-between shrink-0">
           <div className="flex flex-col">
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
               Workspace
@@ -247,8 +247,8 @@ export default function Sidebar({
         </div>
 
         {/* Navigation Items (Scrollable if viewport is short) */}
-        <nav className="p-4 space-y-1.5 flex-1 overflow-y-auto" aria-label="Main Navigation">
-          <div className="px-3 pb-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+        <nav className="p-4 space-y-1 flex-1 min-h-0 overflow-y-auto" aria-label="Main Navigation">
+          <div className="px-3 pb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">
             Navigation
           </div>
           {currentNav.map((item) => {
@@ -258,13 +258,14 @@ export default function Sidebar({
                 key={item.id}
                 type="button"
                 onClick={() => onTabChange(item.id)}
-                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm transition-all duration-150 text-left ${
+                aria-current={isActive ? "page" : undefined}
+                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-lg border text-sm transition-colors duration-150 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${
                   isActive
                     ? activeStyle
-                    : "text-slate-400 hover:text-slate-100 hover:bg-slate-800/60"
+                    : "border-transparent text-slate-300 hover:text-white hover:bg-slate-800/80"
                 }`}
               >
-                <span className={isActive ? "text-current" : "text-slate-400"}>
+                <span className={isActive ? "text-current" : "text-slate-300"}>
                   {item.icon}
                 </span>
                 <span>{item.label}</span>
@@ -275,8 +276,8 @@ export default function Sidebar({
       </div>
 
       {/* User Card & Logout Footer */}
-      <div className="p-4 border-t border-slate-800/80 bg-[#0c1322] shrink-0">
-        <div className="flex items-center gap-3 mb-3 p-2.5 rounded-lg bg-[#172033] border border-slate-800">
+      <div className="p-4 border-t border-slate-700/70 bg-[#0d1422] shrink-0">
+        <div className="flex items-center gap-3 mb-3 p-2.5 rounded-lg bg-slate-800/70 border border-slate-700/80">
           <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-bold text-slate-200">
             {user?.name ? user.name.charAt(0).toUpperCase() : "U"}
           </div>
@@ -293,7 +294,7 @@ export default function Sidebar({
         <button
           type="button"
           onClick={onLogout}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-slate-300 hover:text-rose-300 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-900/50 transition-all duration-150"
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-slate-200 hover:text-rose-200 hover:bg-rose-950/40 border border-slate-700/80 hover:border-rose-900/60 transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
