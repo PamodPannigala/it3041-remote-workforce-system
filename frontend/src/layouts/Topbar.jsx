@@ -5,13 +5,15 @@ export default function Topbar({
   user,
   activeTabTitle = "Overview",
   onOpenMobileNav,
+  isSidebarCollapsed = false,
+  onToggleSidebar,
 }) {
   const role = user?.role || "employee";
 
   return (
     <header className="min-h-16 border-b border-slate-200/80 bg-white/95 backdrop-blur-md px-4 sm:px-6 flex items-center justify-between sticky top-0 z-30 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-      {/* Left: Mobile Toggle & Page Title */}
-      <div className="flex items-center gap-3">
+      {/* Left: Navigation Toggle & Page Title */}
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0">
         <button
           type="button"
           onClick={onOpenMobileNav}
@@ -20,6 +22,21 @@ export default function Topbar({
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+
+        <button
+          type="button"
+          onClick={onToggleSidebar}
+          className="hidden md:inline-flex p-2 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+          aria-label={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!isSidebarCollapsed}
+          aria-controls="desktop-sidebar"
+          title={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3.5" y="4.5" width="17" height="15" rx="2" strokeWidth="1.8" />
+            <path strokeLinecap="round" strokeWidth="1.8" d="M9 5v14m4-10 2.5 3-2.5 3" />
           </svg>
         </button>
 

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Sidebar from "./Sidebar";
 import Topbar from "./Topbar";
 import MobileNavigation from "./MobileNavigation";
@@ -12,6 +12,21 @@ export default function AppShell({
   children,
 }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem("rws.sidebarCollapsed") === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("rws.sidebarCollapsed", String(sidebarCollapsed));
+    } catch {
+      // Storage may be unavailable in private or restricted browser contexts.
+    }
+  }, [sidebarCollapsed]);
 
   return (
     <div className="min-h-screen bg-[var(--app-canvas)] text-slate-900 flex relative overflow-x-hidden font-sans">
@@ -20,7 +35,8 @@ export default function AppShell({
         activeTab={activeTab}
         onTabChange={onTabChange}
         onLogout={onLogout}
-        className="hidden md:flex fixed inset-y-0 left-0 w-64 h-screen z-20"
+        isCollapsed={sidebarCollapsed}
+        className="hidden md:flex fixed inset-y-0 left-0 h-screen z-20 transition-[width] duration-200 ease-out"
       />
 
       {/* Mobile Drawer */}
@@ -34,11 +50,13 @@ export default function AppShell({
       />
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0 md:pl-64">
+      <div className={`flex-1 flex flex-col min-w-0 transition-[padding] duration-200 ease-out ${sidebarCollapsed ? "md:pl-20" : "md:pl-64"}`}>
         <Topbar
           user={user}
           activeTabTitle={activeTabTitle}
           onOpenMobileNav={() => setMobileNavOpen(true)}
+          isSidebarCollapsed={sidebarCollapsed}
+          onToggleSidebar={() => setSidebarCollapsed((collapsed) => !collapsed)}
         />
 
         <main className="flex-1 w-full max-w-screen-2xl mx-auto px-4 py-5 sm:px-6 sm:py-7 xl:px-8">
