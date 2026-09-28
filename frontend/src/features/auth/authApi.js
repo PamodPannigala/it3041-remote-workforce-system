@@ -3,6 +3,28 @@
  * All requests are routed through the /api relative path (proxied by Vite in dev).
  */
 
+const REQUEST_TIMEOUT_MS = 15000;
+
+async function fetchWithTimeout(url, options) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err.name === "AbortError") {
+      const timeoutError = new Error(
+        "The request timed out. Check that the backend and database are running, then try again."
+      );
+      timeoutError.status = 408;
+      throw timeoutError;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function handleResponse(response) {
   let data = null;
   const contentType = response.headers.get("content-type");
@@ -46,7 +68,7 @@ async function handleResponse(response) {
 
 export async function registerUser({ name, email, password }) {
   try {
-    const response = await fetch("/api/auth/register", {
+    const response = await fetchWithTimeout("/api/auth/register", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -64,7 +86,7 @@ export async function registerUser({ name, email, password }) {
 
 export async function loginUser({ email, password }) {
   try {
-    const response = await fetch("/api/auth/login", {
+    const response = await fetchWithTimeout("/api/auth/login", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -82,7 +104,7 @@ export async function loginUser({ email, password }) {
 
 export async function getMe(token) {
   try {
-    const response = await fetch("/api/auth/me", {
+    const response = await fetchWithTimeout("/api/auth/me", {
       headers: {
         Authorization: `Bearer ${token}`,
       },
@@ -97,7 +119,7 @@ export async function getMe(token) {
 }
 
 export async function checkAdminAccess(token) {
-  const response = await fetch("/api/admin/access-check", {
+  const response = await fetchWithTimeout("/api/admin/access-check", {
     headers: {
       Authorization: `Bearer ${token}`,
     },
@@ -106,7 +128,7 @@ export async function checkAdminAccess(token) {
 }
 
 export async function checkManagementAccess(token) {
-  const response = await fetch("/api/management/access-check", {
+  const response = await fetchWithTimeout("/api/management/access-check", {
     headers: {
       Authorization: `Bearer ${token}`,
     },

@@ -32,6 +32,16 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+async def _run_database_operation(operation):
+    try:
+        return await operation
+    except PyMongoError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service is temporarily unavailable",
+        ) from None
+
+
 async def _record_failed_login(database, user: dict, email: str) -> None:
     users = database["users"]
     while True:
@@ -125,7 +135,9 @@ async def login(payload: LoginRequest, request: Request, response: Response):
     database = request.app.state.database
     email = str(payload.email).lower()
 
-    user = await database["users"].find_one({"email": email})
+    user = await _run_database_operation(
+        database["users"].find_one({"email": email})
+    )
 
     if not user:
         # Run dummy hash verification to mitigate timing differences for non-existent users
@@ -155,9 +167,11 @@ async def login(payload: LoginRequest, request: Request, response: Response):
                 detail="Invalid email or password",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        await database["users"].update_one(
-            {"_id": user["_id"], "locked_until": user.get("locked_until")},
-            {"$set": {"failed_login_attempts": 0, "locked_until": None}},
+        await _run_database_operation(
+            database["users"].update_one(
+                {"_id": user["_id"], "locked_until": user.get("locked_until")},
+                {"$set": {"failed_login_attempts": 0, "locked_until": None}},
+            )
         )
         user["failed_login_attempts"] = 0
         user["locked_until"] = None
@@ -169,16 +183,18 @@ async def login(payload: LoginRequest, request: Request, response: Response):
     )
 
     if not is_valid or not user.get("is_active", False):
-        await _record_failed_login(database, user, email)
+        await _run_database_operation(_record_failed_login(database, user, email))
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    await database["users"].update_one(
-        {"_id": user["_id"]},
-        {"$set": {"failed_login_attempts": 0, "locked_until": None}},
+    await _run_database_operation(
+        database["users"].update_one(
+            {"_id": user["_id"]},
+            {"$set": {"failed_login_attempts": 0, "locked_until": None}},
+        )
     )
 
     access_token, expires_in = create_access_token(str(user["_id"]))
