@@ -135,12 +135,18 @@ class TeamDetailResponse(BaseModel):
     created_at: str | None = None
 
 
+class EmployeeTeamMemberResponse(BaseModel):
+    name: str
+    role: Literal["employee"]
+
+
 class EmployeeTeamSummaryResponse(BaseModel):
     has_team: bool
     team_id: str | None = None
     team_name: str | None = None
     manager_name: str | None = None
     manager_email: str | None = None
+    members: list[EmployeeTeamMemberResponse] = Field(default_factory=list)
 
 
 class UpdateEmployeeProfileRequest(BaseModel):

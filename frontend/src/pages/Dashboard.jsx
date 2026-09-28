@@ -554,9 +554,9 @@ export default function Dashboard({ initialTab = "overview", user: propUser, tok
                     </h5>
                     {employeeTeamSummary.members && employeeTeamSummary.members.length > 0 ? (
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                        {employeeTeamSummary.members.map((member) => (
+                        {employeeTeamSummary.members.map((member, index) => (
                           <div
-                            key={member.id}
+                            key={`${member.name}-${index}`}
                             className="p-3 rounded-lg bg-white border border-slate-200/80 shadow-sm flex items-center gap-3"
                           >
                             <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 text-xs font-bold text-slate-700 flex items-center justify-center shrink-0">
@@ -564,7 +564,7 @@ export default function Dashboard({ initialTab = "overview", user: propUser, tok
                             </div>
                             <div className="min-w-0 flex-1">
                               <p className="text-xs font-semibold text-slate-900 truncate">{member.name}</p>
-                              <p className="text-[11px] text-slate-500 truncate">{member.email}</p>
+                              <p className="text-[11px] text-slate-500 truncate capitalize">{member.role}</p>
                             </div>
                           </div>
                         ))}
