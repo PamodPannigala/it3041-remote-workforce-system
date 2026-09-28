@@ -241,8 +241,123 @@ def test_employee_team_summary_and_boundary_enforcement(test_setup):
     assert data_assigned["team_name"] == "Frontend Team"
     assert data_assigned["manager_name"] == "Lead Manager"
     assert data_assigned["manager_email"] == "mgr@example.com"
+    assert data_assigned["members"] == []
 
     # Employees CANNOT list members of any team directly
     assert client.get(f"/teams/{team_id}/members", headers={"Authorization": f"Bearer {assigned_token}"}).status_code == 403
     assert client.get("/teams/managed", headers={"Authorization": f"Bearer {assigned_token}"}).status_code == 403
     assert client.get("/admin/teams", headers={"Authorization": f"Bearer {assigned_token}"}).status_code == 403
+
+
+def test_employee_team_summary_returns_only_other_active_same_team_members(test_setup):
+    client, fake_db = test_setup
+
+    admin = create_user(fake_db, email="admin2@example.com", role="admin", name="Admin")
+    manager = create_user(fake_db, email="manager2@example.com", role="manager", name="Team Lead")
+    employee = create_user(fake_db, email="pamod@example.com", name="Pamod Sachintha")
+    teammate = create_user(fake_db, email="active@example.com", name="Active Teammate")
+    inactive_teammate = create_user(
+        fake_db,
+        email="inactive@example.com",
+        name="Inactive Teammate",
+        is_active=False,
+    )
+    other_team_employee = create_user(fake_db, email="other@example.com", name="Other Team Employee")
+    unassigned_employee = create_user(fake_db, email="unassigned2@example.com", name="Unassigned Employee")
+
+    team_id = ObjectId()
+    other_team_id = ObjectId()
+    fake_db["teams"].docs.extend([
+        {
+            "_id": team_id,
+            "name": "Gama",
+            "manager_id": manager["_id"],
+            "created_at": datetime.now(timezone.utc),
+        },
+        {
+            "_id": other_team_id,
+            "name": "Other Team",
+            "manager_id": manager["_id"],
+            "created_at": datetime.now(timezone.utc),
+        },
+    ])
+    employee["team_id"] = team_id
+    teammate["team_id"] = team_id
+    inactive_teammate["team_id"] = team_id
+    other_team_employee["team_id"] = other_team_id
+
+    employee_token = make_token(employee["_id"])
+    response = client.get(
+        "/teams/my-summary",
+        headers={"Authorization": f"Bearer {employee_token}"},
+    )
+
+    assert response.status_code == 200
+    summary = response.json()
+    assert summary["team_name"] == "Gama"
+    assert summary["members"] == [{"name": "Active Teammate", "role": "employee"}]
+    assert set(summary["members"][0]) == {"name", "role"}
+    serialized = response.text
+    for private_value in (
+        str(employee["_id"]),
+        str(teammate["_id"]),
+        teammate["email"],
+        inactive_teammate["email"],
+        other_team_employee["email"],
+        unassigned_employee["email"],
+    ):
+        assert private_value not in serialized
+
+    unrelated = client.get(
+        f"/teams/{other_team_id}/members",
+        headers={"Authorization": f"Bearer {employee_token}"},
+    )
+    assert unrelated.status_code == 403
+
+    # Existing privileged views retain their established detailed member contract.
+    admin_response = client.get(
+        "/admin/teams",
+        headers={"Authorization": f"Bearer {make_token(admin['_id'])}"},
+    )
+    assert admin_response.status_code == 200
+    admin_gama = next(team for team in admin_response.json() if team["name"] == "Gama")
+    assert {member["name"] for member in admin_gama["members"]} == {
+        "Pamod Sachintha",
+        "Active Teammate",
+        "Inactive Teammate",
+    }
+
+    manager_response = client.get(
+        "/teams/managed",
+        headers={"Authorization": f"Bearer {make_token(manager['_id'])}"},
+    )
+    assert manager_response.status_code == 200
+    managed_gama = next(team for team in manager_response.json() if team["name"] == "Gama")
+    assert {member["name"] for member in managed_gama["members"]} == {
+        "Pamod Sachintha",
+        "Active Teammate",
+        "Inactive Teammate",
+    }
+
+
+def test_employee_team_summary_single_member_team_has_no_other_members(test_setup):
+    client, fake_db = test_setup
+
+    manager = create_user(fake_db, email="single-manager@example.com", role="manager")
+    employee = create_user(fake_db, email="single@example.com", name="Only Employee")
+    team_id = ObjectId()
+    fake_db["teams"].docs.append({
+        "_id": team_id,
+        "name": "Solo Team",
+        "manager_id": manager["_id"],
+        "created_at": datetime.now(timezone.utc),
+    })
+    employee["team_id"] = team_id
+
+    response = client.get(
+        "/teams/my-summary",
+        headers={"Authorization": f"Bearer {make_token(employee['_id'])}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["members"] == []

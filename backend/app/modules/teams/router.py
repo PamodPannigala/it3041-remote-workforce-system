@@ -3,7 +3,12 @@ from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from backend.app.api.dependencies import get_current_user, require_roles
-from backend.app.schemas import EmployeeTeamSummaryResponse, TeamDetailResponse, TeamMemberResponse
+from backend.app.schemas import (
+    EmployeeTeamMemberResponse,
+    EmployeeTeamSummaryResponse,
+    TeamDetailResponse,
+    TeamMemberResponse,
+)
 
 router = APIRouter(prefix="/teams", tags=["Team Scoped Access"])
 
@@ -110,12 +115,37 @@ async def get_my_team_summary(
 
     manager = await database["users"].find_one({"_id": team.get("manager_id")})
 
+    member_filter = {
+        "team_id": team["_id"],
+        "role": "employee",
+        "is_active": True,
+        "_id": {"$ne": current_user["_id"]},
+    }
+    member_cursor = database["users"].find(member_filter)
+    if hasattr(member_cursor, "to_list"):
+        member_docs = await member_cursor.to_list(length=1000)
+    elif hasattr(member_cursor, "__aiter__"):
+        member_docs = [member async for member in member_cursor]
+    else:
+        member_docs = [
+            member
+            for member in getattr(database["users"], "docs", [])
+            if member.get("team_id") == team["_id"]
+            and member.get("role") == "employee"
+            and member.get("is_active", True)
+            and member.get("_id") != current_user["_id"]
+        ]
+
     return EmployeeTeamSummaryResponse(
         has_team=True,
         team_id=str(team["_id"]),
         team_name=team["name"],
         manager_name=manager.get("name") if manager else None,
         manager_email=manager.get("email") if manager else None,
+        members=[
+            EmployeeTeamMemberResponse(name=member["name"], role="employee")
+            for member in member_docs
+        ],
     )
 
 
