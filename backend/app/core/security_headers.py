@@ -17,6 +17,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         if request.url.path in {"/docs", "/redoc", "/docs/oauth2-redirect"}:
             content_security_policy = (
                 "default-src 'none'; frame-ancestors 'none'; "
+                "connect-src 'self'; "
                 "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
                 "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
                 "img-src 'self' data: https://fastapi.tiangolo.com; "
