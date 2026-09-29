@@ -46,7 +46,7 @@ describe("Public analysis display boundaries", () => {
   it("employee direct workspace entry performs zero capability or resource requests", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     render(<AgentWorkspace user={{ role: "employee" }} token="session" />);
-    expect(screen.getByRole("alert")).toHaveTextContent("managers and administrators");
+    expect(screen.getByRole("alert")).toHaveTextContent("available to managers only");
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(screen.queryByTestId("agent-workspace")).not.toBeInTheDocument();
   });

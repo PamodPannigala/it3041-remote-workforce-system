@@ -9,9 +9,12 @@ export default function Topbar({
   const role = user?.role || "employee";
 
   return (
-    <header className="h-16 border-b border-slate-200/80 bg-white/95 backdrop-blur-md px-4 sm:px-6 flex items-center justify-between sticky top-0 z-30">
+    <header
+      className="h-16 shrink-0 border-b border-slate-200/80 bg-white px-4 sm:px-6 flex items-center justify-between sticky top-0 z-40"
+      data-testid="authenticated-header"
+    >
       {/* Left: Mobile Toggle & Page Title */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 min-w-0 flex-1">
         <button
           type="button"
           onClick={onOpenMobileNav}
@@ -23,19 +26,15 @@ export default function Topbar({
           </svg>
         </button>
 
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-slate-400 hidden sm:inline">
-            Workspace
-          </span>
-          <span className="text-xs text-slate-300 hidden sm:inline">/</span>
-          <h1 className="text-sm sm:text-base font-bold font-heading text-slate-900">
+        <div className="min-w-0 flex-1" data-testid="page-title-area">
+          <h1 className="text-sm sm:text-base font-bold font-heading text-slate-900 truncate" title={activeTabTitle}>
             {activeTabTitle}
           </h1>
         </div>
       </div>
 
       {/* Right: Security Pill & Compact User Avatar */}
-      <div className="flex items-center gap-3 sm:gap-4">
+      <div className="flex items-center gap-3 sm:gap-4 shrink-0 ml-3">
         <div className="hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200/80 text-xs font-medium text-emerald-700">
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
           <span>Session Active</span>

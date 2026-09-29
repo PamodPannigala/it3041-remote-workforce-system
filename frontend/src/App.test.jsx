@@ -1,8 +1,12 @@
 import React from "react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
+
+const globalStyles = readFileSync(resolve(process.cwd(), "src/index.css"), "utf8");
 
 describe("Frontend Authentication, Session Persistence, and Dashboard Flows", () => {
   beforeEach(() => {
@@ -12,6 +16,8 @@ describe("Frontend Authentication, Session Persistence, and Dashboard Flows", ()
 
   it("renders login form by default with necessary inputs and updated footer", () => {
     render(<App />);
+    expect(screen.getAllByText("Remote Workforce System")).toHaveLength(1);
+    expect(screen.queryByText("v1.0")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /welcome back/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/email address/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^password/i)).toBeInTheDocument();
@@ -20,13 +26,68 @@ describe("Frontend Authentication, Session Persistence, and Dashboard Flows", ()
     expect(screen.getByText("IT3041 Remote Workforce System")).toBeInTheDocument();
   });
 
+  it("keeps auth decoration non-interactive, hidden from assistive technology, and reduced-motion safe", () => {
+    const { container } = render(<App />);
+    const decoration = container.querySelector('[data-auth-decoration="gradient-orbs"]');
+    const orbs = container.querySelectorAll("[data-auth-orb]");
+
+    expect(decoration).toHaveAttribute("aria-hidden", "true");
+    expect(decoration).toHaveClass("pointer-events-none");
+    expect(orbs).toHaveLength(3);
+    orbs.forEach((orb) => expect(orb).toHaveAttribute("aria-hidden", "true"));
+
+    expect(globalStyles).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
+    expect(globalStyles).toMatch(/\.auth-orb\s*\{[\s\S]*?animation:\s*none\s*!important/);
+  });
+
+  it("limits presentation-card motion to the readable, non-interactive Protected Access card", () => {
+    const { container } = render(<App />);
+    const floatingCards = container.querySelectorAll("[data-presentation-float]");
+    const protectedAccessCard = container.querySelector('[data-presentation-float="protected-access"]');
+
+    expect(floatingCards).toHaveLength(1);
+    expect(protectedAccessCard).not.toHaveAttribute("aria-hidden");
+    expect(protectedAccessCard).toHaveTextContent("Protected access");
+    expect(protectedAccessCard.querySelector("button, a, input, select, textarea")).toBeNull();
+    expect(globalStyles).toMatch(/\.presentation-float-card\s*\{[\s\S]*?14s ease-in-out/);
+    expect(globalStyles).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.presentation-float-card\s*\{[\s\S]*?animation:\s*none\s*!important[\s\S]*?transform:\s*none\s*!important/);
+  });
+
+  it("preserves accessible password visibility controls for login and registration", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const loginPassword = screen.getByLabelText(/^password/i);
+    const loginVisibility = screen.getByRole("button", { name: /show password/i });
+    expect(loginPassword).toHaveAttribute("type", "password");
+    await user.click(loginVisibility);
+    expect(loginPassword).toHaveAttribute("type", "text");
+    expect(loginVisibility).toHaveAccessibleName(/hide password/i);
+
+    await user.click(screen.getByRole("button", { name: /create an account/i }));
+    const registerVisibility = screen.getByRole("button", { name: /show password/i });
+    expect(screen.getByLabelText(/^password/i)).toHaveAttribute("type", "password");
+    await user.click(registerVisibility);
+    expect(screen.getByLabelText(/^password/i)).toHaveAttribute("type", "text");
+    expect(screen.getByLabelText(/confirm password/i)).toHaveAttribute("type", "text");
+    expect(registerVisibility).toHaveAccessibleName(/hide password/i);
+  });
+
   it("switches to registration form and validates inputs", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     // Switch to register
     await user.click(screen.getByRole("button", { name: /create an account/i }));
+    expect(screen.getAllByText("Remote Workforce System")).toHaveLength(1);
+    expect(screen.queryByText("v1.0")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /create account/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/full name/i)).toBeRequired();
+    expect(screen.getByLabelText(/email address/i)).toBeRequired();
+    expect(screen.getByLabelText(/^password/i)).toBeRequired();
+    expect(screen.getByLabelText(/confirm password/i)).toBeRequired();
+    expect(screen.getByRole("button", { name: /create account/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /sign in/i })).toBeInTheDocument();
 
     // Try short password
     await user.type(screen.getByLabelText(/full name/i), "Test Employee");

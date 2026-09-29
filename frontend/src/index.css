@@ -22,6 +22,84 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+button:not(:disabled) {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+@keyframes auth-orb-float-one {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(22px, -18px, 0); }
+}
+
+@keyframes auth-orb-float-two {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(-18px, 24px, 0); }
+}
+
+@keyframes auth-orb-float-three {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(14px, -22px, 0); }
+}
+
+.auth-orb {
+  will-change: transform;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+}
+
+.auth-orb-one {
+  animation-name: auth-orb-float-one;
+  animation-duration: 10s;
+}
+
+.auth-orb-two {
+  animation-name: auth-orb-float-two;
+  animation-duration: 13s;
+}
+
+.auth-orb-three {
+  animation-name: auth-orb-float-three;
+  animation-duration: 8s;
+}
+
+@keyframes presentation-card-float {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(1px, -5px, 0); }
+}
+
+.presentation-float-card {
+  animation: presentation-card-float 14s ease-in-out -2s infinite alternate;
+  will-change: transform;
+}
+
+.auth-primary-button {
+  background-image: linear-gradient(135deg, #2563eb 0%, #4f46e5 58%, #4338ca 100%);
+  border-color: rgba(67, 56, 202, 0.75);
+  box-shadow: 0 8px 18px -12px rgba(37, 99, 235, 0.85);
+  transition-property: transform, box-shadow, filter;
+  transition-duration: 200ms;
+}
+
+.auth-primary-button:hover:not(:disabled) {
+  filter: brightness(1.04);
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px -13px rgba(37, 99, 235, 0.95);
+}
+
+.auth-primary-button:active:not(:disabled) {
+  transform: translateY(0) scale(0.99);
+}
+
+.auth-primary-button:focus-visible {
+  outline: 2px solid #4f46e5;
+  outline-offset: 3px;
+}
+
 /* Custom Scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
@@ -43,6 +121,22 @@ body {
 
 /* Accessibility: Prefers Reduced Motion */
 @media (prefers-reduced-motion: reduce) {
+  .auth-orb {
+    animation: none !important;
+    transform: none !important;
+    will-change: auto;
+  }
+
+  .presentation-float-card {
+    animation: none !important;
+    transform: none !important;
+    will-change: auto;
+  }
+
+  .auth-primary-button:hover:not(:disabled) {
+    transform: none;
+  }
+
   *, ::before, ::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;

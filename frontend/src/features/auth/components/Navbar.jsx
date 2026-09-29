@@ -9,7 +9,7 @@ export default function Navbar() {
 
   return (
     <header className="h-16 px-4 sm:px-6 bg-white/95 border-b border-slate-200/80 backdrop-blur-xl flex items-center justify-between sticky top-0 z-40">
-      <BrandLogo />
+      <BrandLogo showTag={false} singleLine />
 
       <div className="flex items-center gap-3">
         {isAuthenticated && user && (
@@ -20,7 +20,7 @@ export default function Navbar() {
             </div>
             <Button
               id="logout-btn"
-              variant="outline"
+              variant="dangerOutline"
               size="sm"
               onClick={logout}
               type="button"

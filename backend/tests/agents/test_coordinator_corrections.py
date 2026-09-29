@@ -449,21 +449,28 @@ async def test_misclassified_workload_without_both_domains_cannot_dispatch_wellb
     assert not any(c["response_model"] == WellbeingFindingOutput for c in gateway.calls)
 
 
-def test_admin_real_api_retains_team_scoped_aggregate_access(test_setup, production_case):
+def test_admin_real_api_denies_capabilities_and_execution_without_exposure(test_setup, production_case):
     client, _ = test_setup
-    db, _, coord, _, team, *_ = production_case
+    db, gateway, coord, _, team, *_ = production_case
     admin = create_user(db, email="correction-admin@example.com", role="admin")
     app.state.database = db
     app.dependency_overrides[get_agent_coordinator] = lambda: coord
+    gateway_calls_before = len(gateway.calls)
     try:
         headers = {"Authorization": f"Bearer {make_token(admin['_id'])}"}
         capabilities = client.get("/agents/capabilities", headers=headers)
-        assert capabilities.status_code == 200
-        assert capabilities.json()["role"] == "admin"
+        assert capabilities.status_code == 403
+        assert "restricted to managers" in capabilities.json()["detail"]
+        assert "supported_intents" not in capabilities.json()
+        assert "available_specialists" not in capabilities.json()
+
         response = client.post("/agents/execute", headers=headers, json={"question": "Give a broad workforce overview", "target_team_id": str(team["_id"])})
-        assert response.status_code == 200
-        assert response.json()["status"] == "completed"
-        assert set(response.json()["consulted_specialists"]) == {"productivity", "collaboration", "wellbeing"}
+        assert response.status_code == 403
+        assert "restricted to managers" in response.json()["detail"]
+        assert response.json().get("consulted_specialists", []) == []
+        assert response.json().get("findings", []) == []
+        assert str(team["_id"]) not in response.text
+        assert len(gateway.calls) == gateway_calls_before
     finally:
         app.dependency_overrides.pop(get_agent_coordinator, None)
 

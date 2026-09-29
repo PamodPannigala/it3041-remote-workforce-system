@@ -14,7 +14,7 @@ export default function AppShell({
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   return (
-    <div className="min-h-screen bg-[#F6F8FC] text-slate-900 flex relative overflow-x-hidden font-sans">
+    <div className="min-h-screen bg-[#F6F8FC] text-slate-900 flex relative overflow-x-clip font-sans">
       {/* Ambient background subtle tint */}
       <div className="fixed inset-0 pointer-events-none z-0">
         <div className="absolute top-0 left-1/4 w-96 h-96 bg-blue-500/[0.03] rounded-full blur-3xl" />

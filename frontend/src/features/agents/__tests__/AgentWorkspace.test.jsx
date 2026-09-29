@@ -759,7 +759,7 @@ describe("Agent Workspace Feature Suite", () => {
    * 6. Navigation Integration Tests
    * --------------------------------------------------------------- */
   describe("Navigation Integration", () => {
-    it("renders AI Insights in desktop Sidebar for manager and admin, and hides for employee", () => {
+    it("renders AI Insights in desktop Sidebar only for managers", () => {
       const { rerender } = render(
         <Sidebar
           user={employeeUser}
@@ -788,7 +788,7 @@ describe("Agent Workspace Feature Suite", () => {
           onLogout={vi.fn()}
         />
       );
-      expect(screen.getByRole("button", { name: /AI Insights/i })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /AI Insights/i })).not.toBeInTheDocument();
     });
 
     it("renders AI Insights in MobileNavigation drawer", () => {
@@ -1476,20 +1476,23 @@ describe("Agent Workspace Feature Suite", () => {
       expect(screen.queryByRole("button", { name: /AI Insights/i })).not.toBeInTheDocument();
     });
 
-    it("Employee direct Dashboard AI route denied", async () => {
+    it("Employee direct Dashboard AI route is safely redirected", async () => {
       setupMockFetch();
 
       render(<Dashboard initialTab="ai-insights" user={employeeUser} token={fakeToken} />);
 
-      const restrictedNotice = await screen.findByTestId("employee-ai-insights-restricted");
-      expect(restrictedNotice).toBeInTheDocument();
-      expect(restrictedNotice).toHaveTextContent("Access Restricted");
-      expect(restrictedNotice).toHaveTextContent(
-        "AI Insights and Coordinator workflows are restricted to managers and administrators."
-      );
-
+      expect(await screen.findByRole("heading", { name: "Overview" })).toBeInTheDocument();
       expect(screen.queryByText("AI Workforce Coordinator")).not.toBeInTheDocument();
       expect(screen.queryByLabelText(/What would you like to understand\?/i)).not.toBeInTheDocument();
+    });
+
+    it("Admin direct AgentWorkspace entry performs zero capability or resource requests", () => {
+      const fetchSpy = vi.fn();
+      global.fetch = fetchSpy;
+      render(<AgentWorkspace user={{ ...managerUser, role: "admin" }} token={fakeToken} />);
+      expect(screen.getByRole("alert")).toHaveTextContent("available to managers only");
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("agent-workspace")).not.toBeInTheDocument();
     });
 
     it("Manager AI Insights access preserved", async () => {

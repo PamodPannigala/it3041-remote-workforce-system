@@ -8,16 +8,16 @@ export function Card({
   ...props
 }) {
   const variantStyles = {
-    default: "bg-white border-slate-200/80 shadow-sm",
-    elevated: "bg-white border-slate-200 shadow-md",
-    glass: "bg-white/90 backdrop-blur-md border-slate-200 shadow-sm",
-    employee: "bg-white border-slate-200/80 shadow-sm border-l-4 border-l-blue-500",
-    manager: "bg-white border-slate-200/80 shadow-sm border-l-4 border-l-amber-500",
-    admin: "bg-white border-slate-200/80 shadow-sm border-l-4 border-l-violet-500",
+    default: "bg-white border-slate-200/90 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-18px_rgba(15,23,42,0.22)]",
+    elevated: "bg-white border-slate-200/90 shadow-[0_2px_5px_rgba(15,23,42,0.06),0_16px_36px_-22px_rgba(15,23,42,0.28)]",
+    glass: "bg-white/90 backdrop-blur-md border-white/80 shadow-[0_1px_3px_rgba(15,23,42,0.05),0_12px_30px_-20px_rgba(37,99,235,0.22)]",
+    employee: "bg-white border-slate-200/90 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(37,99,235,0.28)] border-l-4 border-l-blue-500",
+    manager: "bg-white border-slate-200/90 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(245,158,11,0.25)] border-l-4 border-l-amber-500",
+    admin: "bg-white border-slate-200/90 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(139,92,246,0.26)] border-l-4 border-l-violet-500",
   };
 
   const hoverStyle = hover
-    ? "transition-all duration-200 hover:border-slate-300 hover:shadow-md hover:-translate-y-0.5"
+    ? "cursor-pointer transition-[transform,border-color,box-shadow] duration-200 hover:border-blue-300 hover:shadow-[0_4px_10px_rgba(15,23,42,0.08),0_18px_38px_-22px_rgba(37,99,235,0.28)] hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 motion-reduce:transform-none motion-reduce:transition-none"
     : "";
 
   return (

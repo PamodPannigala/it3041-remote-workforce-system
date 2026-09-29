@@ -806,7 +806,7 @@ def test_employee_get_capabilities_returns_403(fake_db: FakeAsyncDatabase):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 403
-    assert "AI Insights capabilities are restricted to managers and administrators" in resp.json()["detail"]
+    assert "AI Insights capabilities are restricted to managers" in resp.json()["detail"]
 
 
 def test_employee_post_execute_returns_403(fake_db: FakeAsyncDatabase):
@@ -826,7 +826,7 @@ def test_employee_post_execute_returns_403(fake_db: FakeAsyncDatabase):
         json={"question": "Analyze my productivity"},
     )
     assert resp.status_code == 403
-    assert "AI Insights and Coordinator workflows are restricted to managers and administrators" in resp.json()["detail"]
+    assert "AI Insights and Coordinator workflows are restricted to managers" in resp.json()["detail"]
 
 
 def test_employee_rejection_occurs_before_evidence_queries(test_setup, monkeypatch):

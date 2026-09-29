@@ -13,7 +13,7 @@ export default function Button({
   ...props
 }) {
   const baseStyles =
-    "inline-flex items-center justify-center font-semibold transition-all duration-150 rounded-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none select-none active:scale-[0.98]";
+    "inline-flex cursor-pointer items-center justify-center rounded-lg font-semibold select-none transition-[transform,background-color,border-color,color,box-shadow,filter] duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-white enabled:hover:-translate-y-px enabled:active:translate-y-0 enabled:active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none disabled:transform-none motion-reduce:transform-none motion-reduce:transition-none";
 
   const sizeStyles = {
     sm: "px-2.5 py-1.5 text-xs gap-1.5",
@@ -23,29 +23,30 @@ export default function Button({
 
   const variantStyles = {
     primary:
-      "bg-blue-600 hover:bg-blue-700 text-white shadow-sm shadow-blue-500/20 focus:ring-blue-500 border border-blue-600",
+      "border border-indigo-600 bg-gradient-to-br from-blue-600 to-indigo-600 text-white shadow-sm shadow-blue-500/25 enabled:hover:from-blue-700 enabled:hover:to-indigo-700 enabled:hover:shadow-md enabled:hover:shadow-blue-500/25 focus-visible:ring-blue-500",
     secondary:
-      "bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 hover:border-slate-400 focus:ring-slate-400 shadow-sm",
+      "border border-slate-300 bg-slate-50 text-slate-700 shadow-sm enabled:hover:border-blue-300 enabled:hover:bg-blue-50/70 enabled:hover:text-slate-900 enabled:hover:shadow-md focus-visible:ring-blue-500",
     outline:
-      "bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 border border-slate-200 hover:border-slate-300 focus:ring-slate-400 shadow-sm",
+      "border border-slate-300 bg-white/90 text-slate-700 shadow-sm enabled:hover:border-blue-300 enabled:hover:bg-blue-50/60 enabled:hover:text-blue-800 enabled:hover:shadow-md focus-visible:ring-blue-500",
     ghost:
-      "bg-transparent hover:bg-slate-100 text-slate-600 hover:text-slate-900 focus:ring-slate-400",
+      "bg-transparent text-slate-600 enabled:hover:bg-slate-100 enabled:hover:text-slate-900 focus-visible:ring-slate-400",
     danger:
-      "bg-rose-600 hover:bg-rose-700 text-white shadow-sm shadow-rose-600/20 focus:ring-rose-500 border border-rose-600",
+      "border border-rose-600 bg-rose-600 text-white shadow-sm shadow-rose-600/20 enabled:hover:border-rose-700 enabled:hover:bg-rose-700 enabled:hover:shadow-md enabled:hover:shadow-rose-600/20 focus-visible:ring-rose-500",
     dangerOutline:
-      "bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 border border-rose-200 focus:ring-rose-500",
+      "border border-rose-300 bg-rose-50 text-rose-700 shadow-sm enabled:hover:border-rose-400 enabled:hover:bg-rose-100 enabled:hover:text-rose-800 enabled:hover:shadow-md focus-visible:ring-rose-500",
     success:
-      "bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm shadow-emerald-500/20 focus:ring-emerald-500 border border-emerald-600",
+      "border border-emerald-600 bg-emerald-600 text-white shadow-sm shadow-emerald-500/20 enabled:hover:border-emerald-700 enabled:hover:bg-emerald-700 enabled:hover:shadow-md enabled:hover:shadow-emerald-500/20 focus-visible:ring-emerald-500",
     amber:
-      "bg-amber-600 hover:bg-amber-700 text-white shadow-sm shadow-amber-500/20 focus:ring-amber-500 border border-amber-600",
+      "border border-amber-600 bg-amber-600 text-white shadow-sm shadow-amber-500/20 enabled:hover:border-amber-700 enabled:hover:bg-amber-700 enabled:hover:shadow-md enabled:hover:shadow-amber-500/20 focus-visible:ring-amber-500",
     violet:
-      "bg-violet-600 hover:bg-violet-700 text-white shadow-sm shadow-violet-500/20 focus:ring-violet-500 border border-violet-600",
+      "border border-violet-600 bg-violet-600 text-white shadow-sm shadow-violet-500/20 enabled:hover:border-violet-700 enabled:hover:bg-violet-700 enabled:hover:shadow-md enabled:hover:shadow-violet-500/20 focus-visible:ring-violet-500",
   };
 
   return (
     <button
       type={type}
       disabled={disabled || loading}
+      aria-busy={loading || undefined}
       onClick={onClick}
       className={`${baseStyles} ${sizeStyles[size] || sizeStyles.md} ${variantStyles[variant] || variantStyles.primary} ${className}`}
       {...props}

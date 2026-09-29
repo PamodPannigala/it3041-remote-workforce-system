@@ -4,6 +4,7 @@ import jwt
 import pytest
 
 from backend.app.core.security import JWT_ALGORITHM, JWT_AUDIENCE, JWT_ISSUER, hash_password
+from backend.app.schemas import TEAM_MESSAGE_MAX_LENGTH
 from backend.tests.conftest import TEST_JWT_SECRET
 
 
@@ -773,6 +774,107 @@ def test_content_longer_than_4000_chars_returns_422(test_setup):
 
     res = client.post("/collaboration/messages", json={"team_id": str(team["_id"]), "content": long_content}, headers={"Authorization": f"Bearer {token}"})
     assert res.status_code == 422
+
+
+def test_create_message_accepts_exact_limit_and_rejects_one_over_without_writing(test_setup):
+    assert TEAM_MESSAGE_MAX_LENGTH == 1000
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr@example.com", role="manager")
+    team = create_team(fake_db, name="Team 1", manager_id=mgr["_id"])
+    emp = create_user(fake_db, email="emp@example.com", role="employee", team_id=team["_id"])
+    token = make_token(emp["_id"])
+
+    exact_content = "A" * TEAM_MESSAGE_MAX_LENGTH
+    accepted = client.post(
+        "/collaboration/messages",
+        json={"team_id": str(team["_id"]), "content": exact_content},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert accepted.status_code == 201
+    assert accepted.json()["content"] == exact_content
+    assert len(fake_db["collaboration_messages"].docs) == 1
+
+    rejected = client.post(
+        "/collaboration/messages",
+        json={"team_id": str(team["_id"]), "content": "B" * (TEAM_MESSAGE_MAX_LENGTH + 1)},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert rejected.status_code == 422
+    assert len(fake_db["collaboration_messages"].docs) == 1
+    error_body = rejected.json()
+    assert isinstance(error_body.get("detail"), list)
+    assert "traceback" not in str(error_body).lower()
+    assert "mongodb" not in str(error_body).lower()
+
+
+def test_update_message_uses_same_limit_and_rejection_preserves_record(test_setup):
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr@example.com", role="manager")
+    team = create_team(fake_db, name="Team 1", manager_id=mgr["_id"])
+    emp = create_user(fake_db, email="emp@example.com", role="employee", team_id=team["_id"])
+    message = {
+        "_id": ObjectId(),
+        "team_id": team["_id"],
+        "sender_id": emp["_id"],
+        "content": "Original content",
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+        "edited_at": None,
+        "is_deleted": False,
+        "deleted_at": None,
+        "deleted_by": None,
+    }
+    fake_db["collaboration_messages"].docs.append(message)
+    token = make_token(emp["_id"])
+
+    exact_content = "U" * TEAM_MESSAGE_MAX_LENGTH
+    accepted = client.patch(
+        f"/collaboration/messages/{message['_id']}",
+        json={"content": exact_content},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert accepted.status_code == 200
+    assert message["content"] == exact_content
+
+    rejected = client.patch(
+        f"/collaboration/messages/{message['_id']}",
+        json={"content": "V" * (TEAM_MESSAGE_MAX_LENGTH + 1)},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert rejected.status_code == 422
+    assert message["content"] == exact_content
+
+
+def test_existing_message_over_new_limit_remains_readable_and_unmodified(test_setup):
+    client, fake_db = test_setup
+    mgr = create_user(fake_db, email="mgr@example.com", role="manager")
+    team = create_team(fake_db, name="Team 1", manager_id=mgr["_id"])
+    emp = create_user(fake_db, email="emp@example.com", role="employee", team_id=team["_id"])
+    stored_content = "H" * (TEAM_MESSAGE_MAX_LENGTH + 250)
+    message = {
+        "_id": ObjectId(),
+        "team_id": team["_id"],
+        "sender_id": emp["_id"],
+        "content": stored_content,
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+        "edited_at": None,
+        "is_deleted": False,
+        "deleted_at": None,
+        "deleted_by": None,
+    }
+    fake_db["collaboration_messages"].docs.append(message)
+
+    response = client.get(
+        f"/collaboration/messages/{message['_id']}",
+        headers={"Authorization": f"Bearer {make_token(emp['_id'])}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["content"] == stored_content
+    assert message["content"] == stored_content
 
 
 def test_unexpected_request_fields_return_422(test_setup):

@@ -35,10 +35,10 @@ export default function LoginForm({ onSwitchToRegister, successMessage }) {
   const displayError = localError || authError;
 
   return (
-    <div className="w-full max-w-md mx-auto space-y-6">
+    <div className="w-full max-w-md mx-auto space-y-4">
       {/* Header */}
       <div className="space-y-1.5 text-center sm:text-left">
-        <h1 className="text-2xl sm:text-3xl font-extrabold font-heading text-slate-900 tracking-tight">
+        <h1 className="text-2xl font-extrabold font-heading text-slate-900 tracking-tight">
           Welcome Back
         </h1>
         <p className="text-sm text-slate-500">
@@ -61,7 +61,7 @@ export default function LoginForm({ onSwitchToRegister, successMessage }) {
       )}
 
       {/* Form */}
-      <form onSubmit={handleSubmit} noValidate className="space-y-4">
+      <form onSubmit={handleSubmit} noValidate className="space-y-3.5">
         {/* Email */}
         <div className="space-y-1.5">
           <label
@@ -80,7 +80,7 @@ export default function LoginForm({ onSwitchToRegister, successMessage }) {
               disabled={loading}
               autoComplete="email"
               required
-              className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-600 transition-colors disabled:opacity-50"
+              className="w-full px-3.5 py-2.5 bg-white/90 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 text-sm shadow-sm hover:border-indigo-300 focus:outline-none focus:ring-4 focus:ring-blue-500/15 focus:border-blue-600 focus:shadow-[0_8px_20px_-14px_rgba(37,99,235,0.65)] transition-[border-color,box-shadow,background-color] duration-200 disabled:opacity-50"
             />
           </div>
         </div>
@@ -105,14 +105,14 @@ export default function LoginForm({ onSwitchToRegister, successMessage }) {
               disabled={loading}
               autoComplete="current-password"
               required
-              className="w-full px-3.5 py-2.5 pr-10 bg-white border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-600 transition-colors disabled:opacity-50"
+              className="w-full px-3.5 py-2.5 pr-11 bg-white/90 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 text-sm shadow-sm hover:border-indigo-300 focus:outline-none focus:ring-4 focus:ring-blue-500/15 focus:border-blue-600 focus:shadow-[0_8px_20px_-14px_rgba(37,99,235,0.65)] transition-[border-color,box-shadow,background-color] duration-200 disabled:opacity-50"
             />
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
               aria-label={showPassword ? "Hide password" : "Show password"}
               tabIndex={-1}
-              className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+              className="absolute inset-y-1 right-1 flex items-center rounded-md px-2 text-slate-400 transition-colors duration-200 hover:bg-indigo-50 hover:text-indigo-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1"
             >
               {showPassword ? (
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -135,21 +135,21 @@ export default function LoginForm({ onSwitchToRegister, successMessage }) {
           variant="primary"
           size="lg"
           loading={loading}
-          className="w-full mt-2"
+          className="auth-primary-button w-full mt-2"
         >
           {loading ? "Authenticating..." : "Sign In"}
         </Button>
       </form>
 
       {/* Switch to Register */}
-      <div className="pt-4 border-t border-slate-100 text-center text-sm text-slate-500">
+      <div className="pt-3 border-t border-slate-200/70 text-center text-sm text-slate-500">
         <span>Don't have an account? </span>
         <button
           id="switch-to-register-btn"
           type="button"
           onClick={onSwitchToRegister}
           disabled={loading}
-          className="font-semibold text-blue-600 hover:text-blue-700 hover:underline ml-1"
+          className="ml-1 rounded-sm font-semibold text-blue-600 underline decoration-transparent underline-offset-4 transition-[color,text-decoration-color] duration-200 hover:text-indigo-700 hover:decoration-indigo-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
         >
           Create an account
         </button>
