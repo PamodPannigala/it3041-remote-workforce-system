@@ -25,6 +25,7 @@ import EmployeePulseSurvey from "../features/pulse-surveys/components/EmployeePu
 import ManagerPulseInsights from "../features/pulse-surveys/components/ManagerPulseInsights";
 import AdminPulseAudit from "../features/pulse-surveys/components/AdminPulseAudit";
 import AgentWorkspace from "../features/agents/components/AgentWorkspace";
+import { resolveAuthorizedTab } from "../features/auth/rolePolicy";
 
 import AppShell from "../layouts/AppShell";
 import PageHeader from "../layouts/PageHeader";
@@ -48,7 +49,9 @@ export default function Dashboard({ initialTab = "overview", user: propUser, tok
   const logout = auth?.logout;
 
   // Navigation Tab View State
-  const [activeTab, setActiveTab] = useState(initialTab);
+  const [activeTab, setActiveTab] = useState(() =>
+    resolveAuthorizedTab(user?.role, initialTab)
+  );
 
   // Admin User Directory State
   const [usersList, setUsersList] = useState([]);
@@ -214,7 +217,7 @@ export default function Dashboard({ initialTab = "overview", user: propUser, tok
     if (!token || !user) return;
     setIsEditingProfile(false);
     if (initialTab) {
-      setActiveTab(initialTab);
+      setActiveTab(resolveAuthorizedTab(user.role, initialTab));
     } else {
       setActiveTab("overview");
     }
@@ -609,13 +612,6 @@ export default function Dashboard({ initialTab = "overview", user: propUser, tok
           />
         )}
 
-        {/* AI Insights Section */}
-        {activeTab === "ai-insights" && (
-          <div className="p-8 text-center text-slate-400" data-testid="employee-ai-insights-restricted">
-            <p className="font-medium text-slate-200">Access Restricted</p>
-            <p className="text-sm mt-1">AI Insights and Coordinator workflows are restricted to managers and administrators.</p>
-          </div>
-        )}
       </div>
     );
   };
@@ -1041,7 +1037,7 @@ export default function Dashboard({ initialTab = "overview", user: propUser, tok
                               </td>
                               <td className="py-3.5 px-4 sm:px-6">
                                 <Button
-                                  variant={u.is_active ? "dangerOutline" : "secondary"}
+                                  variant={u.is_active ? "dangerOutline" : "success"}
                                   size="sm"
                                   onClick={() => handleStatusToggle(u.id, u.is_active)}
                                   disabled={isSelf}
@@ -1327,20 +1323,6 @@ export default function Dashboard({ initialTab = "overview", user: propUser, tok
           />
         )}
 
-        {/* AI Insights Section */}
-        {activeTab === "ai-insights" && user?.role !== "employee" && (
-          <AgentWorkspace
-            user={user}
-            token={token}
-            onSessionExpired={handleSessionExpired}
-          />
-        )}
-        {activeTab === "ai-insights" && user?.role === "employee" && (
-          <div className="p-8 text-center text-slate-400">
-            <p className="font-medium text-slate-200">Access Restricted</p>
-            <p className="text-sm mt-1">AI Insights and Coordinator workflows are restricted to managers and administrators.</p>
-          </div>
-        )}
       </div>
     );
   };
@@ -1349,7 +1331,7 @@ export default function Dashboard({ initialTab = "overview", user: propUser, tok
     <AppShell
       user={user}
       activeTab={activeTab}
-      onTabChange={setActiveTab}
+      onTabChange={(tab) => setActiveTab(resolveAuthorizedTab(user?.role, tab))}
       activeTabTitle={getTabTitle()}
       onLogout={logout}
     >

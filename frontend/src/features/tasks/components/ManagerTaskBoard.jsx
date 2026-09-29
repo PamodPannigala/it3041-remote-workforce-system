@@ -518,10 +518,10 @@ export default function ManagerTaskBoard({
                         {/* Resolve Blockers (if any) */}
                         {unresolvedBlockers.length > 0 && (
                           <Button
-                            variant="dangerOutline"
+                            variant="success"
                             size="sm"
                             onClick={() => handleOpenResolveModal(task, unresolvedBlockers[0])}
-                            className="text-xs bg-rose-50 text-rose-700 hover:bg-rose-100 border-rose-300"
+                            className="text-xs"
                           >
                             Resolve Blocker ({unresolvedBlockers.length})
                           </Button>

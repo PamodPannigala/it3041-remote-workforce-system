@@ -2,8 +2,7 @@ import React, { useState } from "react";
 import Button from "../../../components/ui/Button";
 import Alert from "../../../components/ui/Alert";
 import { createCollaborationMessage } from "../collaborationApi";
-
-const MAX_CONTENT_LENGTH = 4000;
+import { TEAM_MESSAGE_MAX_LENGTH } from "../constants";
 
 export default function MessageComposer({
   teamId,
@@ -19,8 +18,14 @@ export default function MessageComposer({
 
   const trimmedContent = content.trim();
   const charCount = content.length;
-  const isOverLimit = charCount > MAX_CONTENT_LENGTH;
+  const isOverLimit = charCount > TEAM_MESSAGE_MAX_LENGTH;
   const isValid = trimmedContent.length > 0 && !isOverLimit;
+  const counterTone =
+    charCount === TEAM_MESSAGE_MAX_LENGTH
+      ? "text-rose-600 font-semibold"
+      : charCount >= TEAM_MESSAGE_MAX_LENGTH * 0.8
+        ? "text-amber-600 font-semibold"
+        : "text-slate-500";
 
   const handleSubmit = async (e) => {
     if (e) e.preventDefault();
@@ -56,6 +61,10 @@ export default function MessageComposer({
     }
   };
 
+  const handleContentChange = (e) => {
+    setContent(e.target.value.slice(0, TEAM_MESSAGE_MAX_LENGTH));
+  };
+
   return (
     <div className="p-4 sm:p-5 rounded-xl bg-white border border-slate-200/80 shadow-sm space-y-3">
       {error && (
@@ -69,39 +78,28 @@ export default function MessageComposer({
           <label htmlFor="team-message-composer" className="sr-only">
             Compose message to team
           </label>
+          <span
+            id="team-message-character-count"
+            className={`mb-1.5 block text-right font-mono text-xs ${counterTone}`}
+          >
+            {charCount} / {TEAM_MESSAGE_MAX_LENGTH}
+          </span>
           <textarea
             id="team-message-composer"
             rows={3}
             value={content}
-            onChange={(e) => setContent(e.target.value)}
+            onChange={handleContentChange}
             onKeyDown={handleKeyDown}
             disabled={disabled || isSubmitting}
-            maxLength={MAX_CONTENT_LENGTH}
+            maxLength={TEAM_MESSAGE_MAX_LENGTH}
             placeholder={placeholder}
             aria-label="Compose team message"
+            aria-describedby="team-message-character-count"
             className="w-full px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 bg-slate-50/70 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 focus:bg-white transition-all disabled:opacity-60 disabled:cursor-not-allowed resize-y"
           />
         </div>
 
-        <div className="flex flex-col-reverse sm:flex-row sm:items-center justify-between gap-2.5 pt-1">
-          <div className="flex items-center gap-2 text-xs text-slate-500">
-            <span
-              className={`font-mono font-medium ${
-                isOverLimit
-                  ? "text-rose-600 font-bold"
-                  : charCount >= MAX_CONTENT_LENGTH * 0.9
-                  ? "text-amber-600 font-semibold"
-                  : "text-slate-500"
-              }`}
-            >
-              {charCount} / {MAX_CONTENT_LENGTH}
-            </span>
-            <span className="hidden sm:inline text-slate-400">•</span>
-            <span className="hidden sm:inline text-[11px] text-slate-400">
-              Press Ctrl + Enter to send
-            </span>
-          </div>
-
+        <div className="flex justify-end pt-0.5">
           <Button
             type="submit"
             variant="primary"

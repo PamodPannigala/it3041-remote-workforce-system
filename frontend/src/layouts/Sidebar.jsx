@@ -1,6 +1,7 @@
 import React from "react";
 import BrandLogo, { BrandIcon } from "../components/BrandLogo";
 import Badge from "../components/ui/Badge";
+import { canAccessAIInsights } from "../features/auth/rolePolicy";
 
 export default function Sidebar({
   user,
@@ -199,19 +200,12 @@ export default function Sidebar({
           </svg>
         ),
       },
-      {
-        id: "ai-insights",
-        label: "AI Insights",
-        icon: (
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-          </svg>
-        ),
-      },
     ],
   };
 
-  const currentNav = navItemsByRole[role] || navItemsByRole.employee;
+  const currentNav = (navItemsByRole[role] || navItemsByRole.employee).filter(
+    (item) => item.id !== "ai-insights" || canAccessAIInsights(role)
+  );
 
   const activeStylesByRole = {
     employee: "bg-blue-600 text-white border border-blue-500 font-semibold shadow-sm shadow-blue-950/20",
@@ -230,7 +224,7 @@ export default function Sidebar({
       <div className="flex flex-col flex-1 min-h-0">
         {/* Brand Header */}
         <div className={`p-5 border-b border-slate-700/70 shrink-0 ${isCollapsed ? "flex justify-center px-2" : ""}`}>
-          {isCollapsed ? <BrandIcon size={28} /> : <BrandLogo subtitle="System" dark={true} />}
+          {isCollapsed ? <BrandIcon size={28} /> : <BrandLogo subtitle="System" dark={true} showTag={false} />}
         </div>
 
         {/* Role Workspace Banner */}
@@ -302,7 +296,7 @@ export default function Sidebar({
           onClick={onLogout}
           aria-label="Sign out"
           title={isCollapsed ? "Sign out" : undefined}
-          className={`w-full flex items-center justify-center gap-2 ${isCollapsed ? "px-0" : "px-3"} py-2 rounded-lg text-xs font-semibold text-slate-200 hover:text-rose-200 hover:bg-rose-950/40 border border-slate-700/80 hover:border-rose-900/60 transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white`}
+          className={`w-full flex cursor-pointer items-center justify-center gap-2 ${isCollapsed ? "px-0" : "px-3"} py-2 rounded-lg text-xs font-semibold text-slate-200 border border-slate-700/80 transition-[transform,background-color,border-color,color,box-shadow] duration-200 hover:-translate-y-px hover:text-rose-200 hover:bg-rose-950/50 hover:border-rose-800/70 hover:shadow-md active:translate-y-0 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 motion-reduce:transform-none motion-reduce:transition-none`}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />

@@ -175,8 +175,8 @@ export default function ManagerPulseInsights({
 
       {/* Main Insights Header & Controls */}
       <Card variant="manager">
-        <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
+        <CardHeader className="flex flex-col xl:flex-row xl:items-end justify-between gap-5">
+          <div className="min-w-0">
             <div className="flex items-center gap-2.5">
               <CardTitle>Team Pulse Insights</CardTitle>
               <Badge variant="manager" size="sm">
@@ -188,21 +188,24 @@ export default function ManagerPulseInsights({
             </CardDescription>
           </div>
 
-          <div className="flex items-center gap-3 flex-wrap">
+          <div
+            className="flex w-full xl:w-auto flex-col sm:flex-row sm:flex-wrap sm:items-end gap-3"
+            data-testid="pulse-insight-filters"
+          >
             {/* Managed Team Selector */}
             {managedTeams.length > 1 && (
-              <div className="flex items-center gap-2">
+              <div className="flex min-w-0 flex-col gap-1.5">
                 <label
                   htmlFor="manager-pulse-team-select"
                   className="text-xs font-semibold text-slate-600 uppercase tracking-wider shrink-0"
                 >
-                  Team:
+                  Team
                 </label>
                 <select
                   id="manager-pulse-team-select"
                   value={selectedTeamId}
                   onChange={(e) => setSelectedTeamId(e.target.value)}
-                  className="px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/40"
+                  className="h-9 w-full sm:w-auto sm:min-w-48 px-3 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/40"
                   aria-label="Select managed team for pulse insights"
                 >
                   {managedTeams.map((t) => (
@@ -215,36 +218,39 @@ export default function ManagerPulseInsights({
             )}
 
             {/* Optional Week Filter (Monday) */}
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 flex-col gap-1.5">
               <label
                 htmlFor="manager-pulse-week-filter"
                 className="text-xs font-semibold text-slate-600 uppercase tracking-wider shrink-0"
               >
-                Week (Mon):
+                Week (Mon)
               </label>
-              <input
-                id="manager-pulse-week-filter"
-                type="date"
-                value={weekFilter}
-                onChange={(e) => setWeekFilter(e.target.value)}
-                placeholder="YYYY-MM-DD"
-                className="px-2.5 py-1 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/40"
-                aria-label="Filter by Monday week date"
-              />
-              {weekFilter && (
-                <button
-                  type="button"
-                  onClick={() => setWeekFilter("")}
-                  className="text-xs text-slate-500 hover:text-slate-800 underline"
-                >
-                  Clear
-                </button>
-              )}
+              <div className="flex min-w-0 items-center gap-2">
+                <input
+                  id="manager-pulse-week-filter"
+                  type="date"
+                  value={weekFilter}
+                  onChange={(e) => setWeekFilter(e.target.value)}
+                  placeholder="YYYY-MM-DD"
+                  className="h-9 min-w-0 w-full sm:w-auto px-2.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/40"
+                  aria-label="Filter by Monday week date"
+                />
+                {weekFilter && (
+                  <button
+                    type="button"
+                    onClick={() => setWeekFilter("")}
+                    className="shrink-0 text-xs text-slate-500 hover:text-slate-800 underline"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
             </div>
 
             <Button
               variant="outline"
               size="sm"
+              className="h-9 w-full sm:w-auto sm:self-end"
               onClick={() => loadSummary(selectedTeamId, weekFilter)}
               disabled={loading}
               icon={

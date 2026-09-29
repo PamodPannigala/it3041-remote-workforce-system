@@ -7,6 +7,7 @@ import TeamMessages from "../components/TeamMessages";
 import AdminMessageAudit from "../components/AdminMessageAudit";
 import MessageComposer from "../components/MessageComposer";
 import MessageItem from "../components/MessageItem";
+import EditMessageModal from "../components/EditMessageModal";
 
 describe("Collaboration Messages Feature Suite", () => {
   beforeEach(() => {
@@ -220,10 +221,14 @@ describe("Collaboration Messages Feature Suite", () => {
 
       // Compose message
       const composerInput = screen.getByLabelText(/compose team message/i);
-      await user.type(composerInput, "Standup is starting in 5 minutes on the main channel.");
+      const employeeMessage = "Standup is starting in 5 minutes on the main channel.";
+      expect(screen.getByText("0 / 1000")).toBeInTheDocument();
+      await user.type(composerInput, employeeMessage);
 
-      // Check character count indicator
-      expect(screen.getByText(/53 \/ 4000/)).toBeInTheDocument();
+      // The shared composer exposes the same live limit to employees and managers.
+      expect(composerInput).toHaveAttribute("maxLength", "1000");
+      expect(screen.getByText(`${employeeMessage.length} / 1000`)).toBeInTheDocument();
+      expect(screen.queryByText(/Press Ctrl \+ Enter to send/i)).not.toBeInTheDocument();
 
       // Submit
       const sendBtn = screen.getByRole("button", { name: /send message/i });
@@ -232,12 +237,13 @@ describe("Collaboration Messages Feature Suite", () => {
       // Verify POST body had correct team_id and content
       expect(capturedPostBody).toEqual({
         team_id: "64b1f28b4f1c2b3a4e5d6f99",
-        content: "Standup is starting in 5 minutes on the main channel.",
+        content: employeeMessage,
       });
 
       // Verify new message appears in list
-      expect(await screen.findByText("Standup is starting in 5 minutes on the main channel.")).toBeInTheDocument();
+      expect(await screen.findByText(employeeMessage)).toBeInTheDocument();
       expect(screen.getByText(/message posted successfully/i)).toBeInTheDocument();
+      expect(screen.getByText("0 / 1000")).toBeInTheDocument();
     });
 
     it("employee can edit their own message", async () => {
@@ -296,6 +302,11 @@ describe("Collaboration Messages Feature Suite", () => {
       expect(screen.getByRole("heading", { name: /edit message/i })).toBeInTheDocument();
       const editTextarea = screen.getByLabelText(/message content/i);
       expect(editTextarea).toHaveValue("Hello team, I just pushed the feature branch for code review!");
+      expect(editTextarea).toHaveAttribute("maxLength", "1000");
+
+      fireEvent.change(editTextarea, { target: { value: "E".repeat(1001) } });
+      expect(editTextarea.value).toHaveLength(1000);
+      expect(screen.getByText("1000 / 1000")).toBeInTheDocument();
 
       // Update content
       await user.clear(editTextarea);
@@ -473,10 +484,13 @@ describe("Collaboration Messages Feature Suite", () => {
       // Verify manager team selector rendered
       expect(await screen.findByLabelText(/select managed team/i)).toBeInTheDocument();
       expect(capturedTeamIdParam).toBe("64b1f28b4f1c2b3a4e5d6f99");
+      const managerComposer = screen.getByLabelText(/compose team message/i);
+      expect(managerComposer).toHaveAttribute("maxLength", "1000");
+      expect(screen.getByText("0 / 1000")).toBeInTheDocument();
+      expect(screen.queryByText(/Press Ctrl \+ Enter to send/i)).not.toBeInTheDocument();
 
       // Post a manager message
-      const composer = screen.getByLabelText(/compose team message/i);
-      await user.type(composer, "Sprint planning is scheduled for tomorrow 10am.");
+      await user.type(managerComposer, "Sprint planning is scheduled for tomorrow 10am.");
       await user.click(screen.getByRole("button", { name: /send message/i }));
 
       expect(capturedPostBody).toEqual({
@@ -755,6 +769,179 @@ describe("Collaboration Messages Feature Suite", () => {
 
       await user.type(textarea, "Actual message");
       expect(sendBtn).toBeEnabled();
+    });
+
+    it("places the shared composer counter immediately above the textarea and outside the action footer", () => {
+      render(
+        <MessageComposer
+          teamId="team-1"
+          token="test-token"
+          onMessageSent={vi.fn()}
+          onSessionExpired={vi.fn()}
+        />
+      );
+
+      const textarea = screen.getByLabelText(/compose team message/i);
+      const counter = screen.getByText("0 / 1000");
+      const sendButton = screen.getByRole("button", { name: /send message/i });
+
+      expect(counter.nextElementSibling).toBe(textarea);
+      expect(sendButton.parentElement).not.toContainElement(counter);
+      expect(textarea).toHaveAttribute("aria-describedby", counter.id);
+    });
+
+    it("MessageComposer retains Ctrl+Enter submission without visible keyboard helper text", async () => {
+      const user = userEvent.setup();
+      const onMessageSent = vi.fn();
+      let capturedPostBody = null;
+
+      global.fetch = vi.fn().mockImplementation(async (_url, options) => {
+        capturedPostBody = JSON.parse(options.body);
+        return {
+          ok: true,
+          status: 201,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({ id: "message-1", content: capturedPostBody.content }),
+        };
+      });
+
+      render(
+        <MessageComposer
+          teamId="team-1"
+          token="test-token"
+          onMessageSent={onMessageSent}
+          onSessionExpired={vi.fn()}
+        />
+      );
+
+      const textarea = screen.getByLabelText(/compose team message/i);
+      await user.type(textarea, "Keyboard submitted update");
+      expect(textarea).toHaveAttribute("maxLength", "1000");
+      expect(screen.queryByText(/Press Ctrl \+ Enter to send/i)).not.toBeInTheDocument();
+      expect(screen.getByText("25 / 1000")).toBeInTheDocument();
+
+      fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: true });
+
+      await waitFor(() => {
+        expect(capturedPostBody).toEqual({
+          team_id: "team-1",
+          content: "Keyboard submitted update",
+        });
+      });
+      expect(onMessageSent).toHaveBeenCalledTimes(1);
+      expect(screen.getByText("0 / 1000")).toBeInTheDocument();
+    });
+
+    it("MessageComposer limits pasted content and counts Sinhala text", async () => {
+      const user = userEvent.setup();
+      render(
+        <MessageComposer
+          teamId="team-1"
+          token="test-token"
+          onMessageSent={vi.fn()}
+          onSessionExpired={vi.fn()}
+        />
+      );
+
+      const textarea = screen.getByLabelText(/compose team message/i);
+      const sinhalaText = "කණ්ඩායම් පණිවිඩය";
+      await user.type(textarea, sinhalaText);
+      expect(textarea).toHaveValue(sinhalaText);
+      expect(screen.getByText(`${sinhalaText.length} / 1000`)).toBeInTheDocument();
+
+      await user.clear(textarea);
+      await user.click(textarea);
+      await user.paste("P".repeat(1001));
+      expect(textarea.value).toHaveLength(1000);
+      expect(screen.getByText("1000 / 1000")).toBeInTheDocument();
+    });
+
+    it("MessageComposer submits exactly 1000 characters with the button", async () => {
+      const user = userEvent.setup();
+      const exactContent = "A".repeat(1000);
+      let capturedPostBody = null;
+
+      global.fetch = vi.fn().mockImplementation(async (_url, options) => {
+        capturedPostBody = JSON.parse(options.body);
+        return {
+          ok: true,
+          status: 201,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({ id: "message-1", content: exactContent }),
+        };
+      });
+
+      render(
+        <MessageComposer
+          teamId="team-1"
+          token="test-token"
+          onMessageSent={vi.fn()}
+          onSessionExpired={vi.fn()}
+        />
+      );
+
+      const textarea = screen.getByLabelText(/compose team message/i);
+      fireEvent.change(textarea, { target: { value: exactContent } });
+      expect(screen.getByText("1000 / 1000")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /send message/i }));
+
+      expect(capturedPostBody).toEqual({ team_id: "team-1", content: exactContent });
+      expect(textarea).toHaveValue("");
+      expect(screen.getByText("0 / 1000")).toBeInTheDocument();
+    });
+
+    it("MessageComposer preserves content and count after a failed submission", async () => {
+      const user = userEvent.setup();
+      const message = "Keep this message so it can be shortened";
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 422,
+        headers: new Headers({ "content-type": "application/json" }),
+        json: async () => ({
+          detail: [{ loc: ["body", "content"], msg: "String should have at most 1000 characters" }],
+        }),
+      });
+
+      render(
+        <MessageComposer
+          teamId="team-1"
+          token="test-token"
+          onMessageSent={vi.fn()}
+          onSessionExpired={vi.fn()}
+        />
+      );
+
+      const textarea = screen.getByLabelText(/compose team message/i);
+      await user.type(textarea, message);
+      await user.click(screen.getByRole("button", { name: /send message/i }));
+
+      expect(await screen.findByText(/content: string should have at most 1000 characters/i)).toBeInTheDocument();
+      expect(textarea).toHaveValue(message);
+      expect(screen.getByText(`${message.length} / 1000`)).toBeInTheDocument();
+      expect(consoleError).not.toHaveBeenCalled();
+    });
+
+    it("EditMessageModal keeps historical over-limit content readable without enabling an unchanged write", () => {
+      const historicalContent = "H".repeat(1250);
+      render(
+        <EditMessageModal
+          isOpen
+          onClose={vi.fn()}
+          message={{ id: "historical-message", content: historicalContent }}
+          onMessageUpdated={vi.fn()}
+          token="test-token"
+          onSessionExpired={vi.fn()}
+        />
+      );
+
+      const textarea = screen.getByLabelText(/message content/i);
+      const counter = screen.getByText("1000 / 1000");
+      expect(textarea).toHaveValue(historicalContent);
+      expect(textarea).toHaveAttribute("maxLength", "1000");
+      expect(counter.nextElementSibling).toBe(textarea);
+      expect(textarea).toHaveAttribute("aria-describedby", counter.id);
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeDisabled();
     });
 
     it("MessageItem falls back to 'Unknown User' when sender_name is null", () => {

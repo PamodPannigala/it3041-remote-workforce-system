@@ -29,7 +29,14 @@ export default function AppShell({
   }, [sidebarCollapsed]);
 
   return (
-    <div className="min-h-screen bg-[var(--app-canvas)] text-slate-900 flex relative overflow-x-hidden font-sans">
+    <div className="min-h-screen bg-[var(--app-canvas)] text-slate-900 flex relative overflow-x-clip font-sans">
+      {/* Ambient background subtle tint */}
+      <div className="fixed inset-0 pointer-events-none z-0">
+        <div className="absolute top-0 left-1/4 w-96 h-96 bg-blue-500/[0.03] rounded-full blur-3xl" />
+        <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-indigo-500/[0.03] rounded-full blur-3xl" />
+      </div>
+
+      {/* Desktop Sidebar (Anchored Dark Navy) */}
       <Sidebar
         user={user}
         activeTab={activeTab}

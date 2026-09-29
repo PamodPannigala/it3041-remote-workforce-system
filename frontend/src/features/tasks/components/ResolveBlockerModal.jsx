@@ -136,10 +136,9 @@ export default function ResolveBlockerModal({
             <Button
               id="confirm-resolve-blocker-btn"
               type="submit"
-              variant="primary"
+              variant="success"
               size="sm"
               disabled={isSubmitting || !resolutionNote.trim()}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white"
             >
               {isSubmitting ? "Resolving Blocker..." : "Confirm Blocker Resolution"}
             </Button>

@@ -49,20 +49,32 @@ export function BrandIcon({ size = 28, className = "" }) {
   );
 }
 
-export default function BrandLogo({ size = 28, showTag = true, subtitle = "System", dark = false }) {
+export default function BrandLogo({
+  size = 28,
+  showTag = true,
+  subtitle = "System",
+  dark = false,
+  singleLine = false,
+}) {
   return (
-    <div className="flex items-center gap-3">
-      <BrandIcon size={size} />
-      <div className="flex flex-col">
-        <span className={`font-extrabold font-heading text-sm sm:text-base leading-tight tracking-tight ${dark ? "text-slate-100" : "text-slate-900"}`}>
-          Remote Workforce
+    <div className="flex items-center gap-3 min-w-0">
+      <BrandIcon size={size} className="shrink-0" />
+      {singleLine ? (
+        <span className={`font-extrabold font-heading text-sm sm:text-base leading-tight tracking-tight whitespace-nowrap ${dark ? "text-slate-100" : "text-slate-900"}`}>
+          Remote Workforce System
         </span>
-        {subtitle && (
-          <span className={`text-[10px] font-semibold tracking-wider uppercase ${dark ? "text-slate-400" : "text-slate-500"}`}>
-            {subtitle}
+      ) : (
+        <div className="flex flex-col min-w-0">
+          <span className={`font-extrabold font-heading text-sm sm:text-base leading-tight tracking-tight whitespace-nowrap ${dark ? "text-slate-100" : "text-slate-900"}`}>
+            Remote Workforce
           </span>
-        )}
-      </div>
+          {subtitle && (
+            <span className={`text-[10px] font-semibold tracking-wider uppercase whitespace-nowrap ${dark ? "text-slate-400" : "text-slate-500"}`}>
+              {subtitle}
+            </span>
+          )}
+        </div>
+      )}
       {showTag && (
         <span className="hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-mono font-medium rounded bg-blue-50 text-blue-600 border border-blue-200">
           v1.0

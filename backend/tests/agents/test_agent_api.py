@@ -295,7 +295,7 @@ def test_employee_cross_team_rejection(test_setup):
             },
         )
         assert resp.status_code == 403
-        assert "restricted to managers and administrators" in resp.json()["detail"]
+        assert "restricted to managers" in resp.json()["detail"]
     finally:
         app.dependency_overrides.pop(get_agent_coordinator, None)
 
@@ -766,7 +766,7 @@ def test_capabilities_employee_filtered(test_setup):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 403
-    assert "restricted to managers and administrators" in resp.json()["detail"]
+    assert "restricted to managers" in resp.json()["detail"]
 
 
 def test_capabilities_manager_filtered(test_setup):
@@ -788,21 +788,91 @@ def test_capabilities_manager_filtered(test_setup):
     assert "collaboration_analysis" in intents
 
 
-def test_capabilities_admin_filtered(test_setup):
+def test_capabilities_admin_forbidden_without_metadata(test_setup, monkeypatch):
     client, fake_db = test_setup
     admin = create_user(fake_db, email="admin@example.com", role="admin")
     token = make_token(admin["_id"])
+    gate_bypasses = []
+
+    async def fail_principal_resolution(*args, **kwargs):
+        gate_bypasses.append("principal")
+        pytest.fail("Admin capability denial resolved team-scoped principal data")
+
+    def fail_capability_lookup(*args, **kwargs):
+        gate_bypasses.append("capabilities")
+        pytest.fail("Admin capability denial retrieved capability metadata")
+
+    monkeypatch.setattr(
+        "backend.app.modules.agents.router.resolve_authenticated_principal",
+        fail_principal_resolution,
+    )
+    monkeypatch.setattr(
+        "backend.app.modules.agents.router.get_allowed_intents_for_role",
+        fail_capability_lookup,
+    )
 
     resp = client.get(
         "/agents/capabilities",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 403
     data = resp.json()
-    assert data["role"] == "admin"
-    intents = [item["intent"] for item in data["supported_intents"]]
-    assert "general_workforce_question" in intents
-    assert "task_assignment_recommendation" not in intents
+    assert "restricted to managers" in data["detail"]
+    assert "supported_intents" not in data
+    assert "available_specialists" not in data
+    assert "advisory_limitations" not in data
+    assert gate_bypasses == []
+
+
+def test_admin_agent_execution_forbidden_before_resources_or_coordinator(test_setup):
+    client, fake_db = test_setup
+    admin = create_user(fake_db, email="admin_execute@example.com", role="admin")
+    token = make_token(admin["_id"])
+    sensitive_calls = []
+
+    def fail_sensitive_query(collection_name, operation):
+        def fail(*args, **kwargs):
+            sensitive_calls.append((collection_name, operation))
+            pytest.fail(f"Admin denial queried {collection_name}.{operation}")
+        return fail
+
+    for collection_name in (
+        "teams",
+        "tasks",
+        "employee_profiles",
+        "collaboration_messages",
+        "weekly_pulse_responses",
+    ):
+        collection = fake_db[collection_name]
+        collection.find = fail_sensitive_query(collection_name, "find")
+        collection.find_one = fail_sensitive_query(collection_name, "find_one")
+        collection.count_documents = fail_sensitive_query(collection_name, "count_documents")
+
+    mock_coord = MockCoordinator()
+    app.dependency_overrides[get_agent_coordinator] = lambda: mock_coord
+    try:
+        response = client.post(
+            "/agents/execute",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "question": "Analyze all teams",
+                "target_team_id": "507f1f77bcf86cd799439011",
+                "target_task_id": "507f1f77bcf86cd799439012",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_agent_coordinator, None)
+
+    assert response.status_code == 403
+    data = response.json()
+    assert "restricted to managers" in data["detail"]
+    assert data.get("findings", []) == []
+    assert data.get("consulted_specialists", []) == []
+    assert data.get("task_assignment_details") is None
+    assert "507f1f77bcf86cd799439011" not in response.text
+    assert "507f1f77bcf86cd799439012" not in response.text
+    assert sensitive_calls == []
+    assert mock_coord.invocations == []
 
 
 def test_execute_generates_valid_correlation_id_when_omitted(test_setup):
@@ -1144,7 +1214,7 @@ def test_capabilities_match_runtime_authorization_for_all_roles(test_setup):
             "/agents/capabilities",
             headers={"Authorization": f"Bearer {token}"},
         )
-        if role == "employee":
+        if role != "manager":
             assert resp.status_code == 403
             continue
 

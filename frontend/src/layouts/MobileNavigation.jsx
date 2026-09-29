@@ -1,6 +1,7 @@
 import React from "react";
 import BrandLogo from "../components/BrandLogo";
 import Badge from "../components/ui/Badge";
+import { canAccessAIInsights } from "../features/auth/rolePolicy";
 
 export default function MobileNavigation({
   isOpen,
@@ -40,11 +41,12 @@ export default function MobileNavigation({
       { id: "task-audit", label: "Task Audit" },
       { id: "message-audit", label: "Message Audit" },
       { id: "pulse-audit", label: "Pulse Audit" },
-      { id: "ai-insights", label: "AI Insights" },
     ],
   };
 
-  const currentNav = navItemsByRole[role] || navItemsByRole.employee;
+  const currentNav = (navItemsByRole[role] || navItemsByRole.employee).filter(
+    (item) => item.id !== "ai-insights" || canAccessAIInsights(role)
+  );
 
   const activeStylesByRole = {
     employee: "bg-blue-600 text-white border border-blue-500 font-semibold",
@@ -68,7 +70,7 @@ export default function MobileNavigation({
         <div>
           {/* Header */}
           <div className="flex items-center justify-between pb-4 border-b border-slate-700/70">
-            <BrandLogo />
+            <BrandLogo showTag={false} />
             <button
               type="button"
               onClick={onClose}
@@ -123,7 +125,7 @@ export default function MobileNavigation({
           <button
             type="button"
             onClick={onLogout}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-xs font-semibold text-rose-200 bg-rose-950/30 border border-rose-900/60 hover:bg-rose-900/50 transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+            className="w-full flex cursor-pointer items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-xs font-semibold text-rose-200 bg-rose-950/30 border border-rose-900/60 transition-[transform,background-color,border-color,box-shadow] duration-200 hover:-translate-y-px hover:bg-rose-900/50 hover:border-rose-800/70 hover:shadow-md active:translate-y-0 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 motion-reduce:transform-none motion-reduce:transition-none"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />

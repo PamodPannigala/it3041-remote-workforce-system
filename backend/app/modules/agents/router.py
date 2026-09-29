@@ -374,9 +374,9 @@ _coordinator_lock = asyncio.Lock()
 
 
 async def require_ai_user(request: Request, current_user: dict = Depends(get_current_user)) -> dict:
-    if current_user.get("role") not in ("manager", "admin"):
+    if current_user.get("role") != "manager":
         subject = "AI Insights capabilities" if request.url.path.endswith("/capabilities") else "AI Insights and Coordinator workflows"
-        raise HTTPException(status_code=403, detail=f"{subject} are restricted to managers and administrators")
+        raise HTTPException(status_code=403, detail=f"{subject} are restricted to managers")
     return current_user
 
 
@@ -556,10 +556,10 @@ async def execute_agent_workflow(
     database = getattr(request.app.state, "database", None)
     principal = await resolve_authenticated_principal(database, current_user)
 
-    if principal.role == "employee":
+    if principal.role != "manager":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="AI Insights and Coordinator workflows are restricted to managers and administrators",
+            detail="AI Insights and Coordinator workflows are restricted to managers",
         )
 
     correlation_id = payload.correlation_id or str(uuid.uuid4())
@@ -767,10 +767,10 @@ async def get_agent_capabilities(
     principal = await resolve_authenticated_principal(database, current_user)
     role = principal.role
 
-    if role == "employee":
+    if role != "manager":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="AI Insights capabilities are restricted to managers and administrators",
+            detail="AI Insights capabilities are restricted to managers",
         )
 
     allowed_intents = get_allowed_intents_for_role(role)

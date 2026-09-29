@@ -3,6 +3,8 @@
  * All requests are routed through the /api relative path (proxied by Vite in dev).
  */
 
+import { TEAM_MESSAGE_MAX_LENGTH } from "./constants";
+
 async function handleResponse(response) {
   // Handle 204 No Content without attempting JSON parsing
   if (response.status === 204) {
@@ -40,7 +42,7 @@ async function handleResponse(response) {
     } else if (response.status === 409) {
       message = "Conflict: Message operation not permitted in current state.";
     } else if (response.status === 422) {
-      message = "Validation error: Message content must be between 1 and 4000 characters.";
+      message = `Validation error: Message content must be between 1 and ${TEAM_MESSAGE_MAX_LENGTH} characters.`;
     }
 
     const error = new Error(message);
@@ -114,7 +116,7 @@ export async function getCollaborationMessageById(token, messageId) {
  * Update message content (permitted only for the original sender).
  * @param {string} token - JWT Access Token
  * @param {string} messageId - Message ID
- * @param {string} content - Updated message content (1-4000 chars)
+ * @param {string} content - Updated message content (1-1000 chars)
  */
 export async function updateCollaborationMessage(token, messageId, content) {
   const response = await fetch(`/api/collaboration/messages/${messageId}`, {

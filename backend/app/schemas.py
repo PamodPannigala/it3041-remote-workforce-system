@@ -441,6 +441,9 @@ class TaskListResponse(BaseModel):
     total_pages: int
 
 
+TEAM_MESSAGE_MAX_LENGTH = 1000
+
+
 class CreateCollaborationMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -450,7 +453,7 @@ class CreateCollaborationMessageRequest(BaseModel):
         StringConstraints(
             strip_whitespace=True,
             min_length=1,
-            max_length=4000,
+            max_length=TEAM_MESSAGE_MAX_LENGTH,
         ),
     ]
 
@@ -463,7 +466,7 @@ class UpdateCollaborationMessageRequest(BaseModel):
         StringConstraints(
             strip_whitespace=True,
             min_length=1,
-            max_length=4000,
+            max_length=TEAM_MESSAGE_MAX_LENGTH,
         ),
     ]
 

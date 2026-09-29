@@ -1,11 +1,8 @@
 import { sanitizePublicText, sanitizePublicValue } from "../publicProse";
 import React, { useState, useEffect, useRef } from "react";
 import { getAgentCapabilities, executeAgentRequest } from "../agentsApi";
-import {
-  getAdminTeams,
-  getManagedTeams,
-} from "../../teams/teamsApi";
-import { getAdminTasks, getManagedTasks } from "../../tasks/tasksApi";
+import { getManagedTeams } from "../../teams/teamsApi";
+import { getManagedTasks } from "../../tasks/tasksApi";
 import Button from "../../../components/ui/Button";
 import { SkeletonCard } from "../../../components/ui/Skeleton";
 
@@ -14,6 +11,7 @@ import AgentRequestForm from "./AgentRequestForm";
 import AgentExecutionProgress from "./AgentExecutionProgress";
 import AgentResultSummary from "./AgentResultSummary";
 import AgentErrorPanel from "./AgentErrorPanel";
+import { canAccessAIInsights } from "../../auth/rolePolicy";
 
 export default function AgentWorkspace({
   user,
@@ -67,7 +65,7 @@ export default function AgentWorkspace({
 
   // Fetch capabilities and scoping resources
   const loadWorkspaceData = async () => {
-    if (!token || !["manager", "admin"].includes(role)) return;
+    if (!token || !canAccessAIInsights(role)) return;
 
     if (capabilitiesAbortRef.current) {
       capabilitiesAbortRef.current.abort();
@@ -84,32 +82,18 @@ export default function AgentWorkspace({
       const caps = await getAgentCapabilities(token, abortCtrl.signal);
       setCapabilities(caps);
 
-      // 2. Fetch scoped teams & tasks according to authenticated role
+      // 2. Fetch the authenticated manager's scoped teams and tasks.
       let loadedTeams = [];
       let loadedTasks = [];
-
-      if (role === "admin") {
-        const [teamsData, tasksData] = await Promise.allSettled([
-          getAdminTeams(token),
-          getAdminTasks(token, { limit: 50 }),
-        ]);
-        if (teamsData.status === "fulfilled" && Array.isArray(teamsData.value)) {
-          loadedTeams = teamsData.value;
-        }
-        if (tasksData.status === "fulfilled" && tasksData.value?.items) {
-          loadedTasks = tasksData.value.items;
-        }
-      } else if (role === "manager") {
-        const [managedTeamsData, managedTasksData] = await Promise.allSettled([
-          getManagedTeams(token),
-          getManagedTasks(token, { limit: 50 }),
-        ]);
-        if (managedTeamsData.status === "fulfilled" && Array.isArray(managedTeamsData.value)) {
-          loadedTeams = managedTeamsData.value;
-        }
-        if (managedTasksData.status === "fulfilled" && managedTasksData.value?.items) {
-          loadedTasks = managedTasksData.value.items;
-        }
+      const [managedTeamsData, managedTasksData] = await Promise.allSettled([
+        getManagedTeams(token),
+        getManagedTasks(token, { limit: 50 }),
+      ]);
+      if (managedTeamsData.status === "fulfilled" && Array.isArray(managedTeamsData.value)) {
+        loadedTeams = managedTeamsData.value;
+      }
+      if (managedTasksData.status === "fulfilled" && managedTasksData.value?.items) {
+        loadedTasks = managedTasksData.value.items;
       }
 
       setTeams(loadedTeams);
@@ -244,7 +228,7 @@ export default function AgentWorkspace({
     }
   };
 
-  if (!["manager", "admin"].includes(role)) return <p role="alert">AI Insights is available to managers and administrators.</p>;
+  if (!canAccessAIInsights(role)) return <p role="alert">AI Insights is available to managers only.</p>;
 
   return (
     <div

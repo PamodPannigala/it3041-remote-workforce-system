@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import EmployeePulseSurvey from "../components/EmployeePulseSurvey";
 import ManagerPulseInsights from "../components/ManagerPulseInsights";
@@ -858,6 +858,7 @@ describe("Weekly Pulse Surveys Feature Suite", () => {
     ];
 
     it("loads managed teams and requests team summary for selected team", async () => {
+      const user = userEvent.setup();
       let requestedUrl = "";
 
       global.fetch = vi.fn().mockImplementation(async (url) => {
@@ -898,6 +899,28 @@ describe("Weekly Pulse Surveys Feature Suite", () => {
       await waitFor(() => {
         expect(requestedUrl).toContain("/api/pulse-surveys/team-summary?team_id=64b1f28b4f1c2b3a4e5d6f99");
       });
+
+      const filters = screen.getByTestId("pulse-insight-filters");
+      const teamSelect = within(filters).getByLabelText(/select managed team for pulse insights/i);
+      const weekInput = within(filters).getByLabelText(/filter by monday week date/i);
+      const refreshButton = within(filters).getByRole("button", { name: /refresh insights/i });
+
+      expect(teamSelect).toBeEnabled();
+      expect(weekInput).toBeEnabled();
+      expect(refreshButton).toBeEnabled();
+
+      await user.selectOptions(teamSelect, "64b1f28b4f1c2b3a4e5d6f88");
+      await waitFor(() => {
+        expect(requestedUrl).toContain("team_id=64b1f28b4f1c2b3a4e5d6f88");
+      });
+
+      await user.type(weekInput, "2026-09-21");
+      await waitFor(() => {
+        expect(requestedUrl).toContain("week_start=2026-09-21");
+      });
+
+      await user.click(refreshButton);
+      await waitFor(() => expect(global.fetch).toHaveBeenCalled());
 
       // Verify aggregate scores are visible
       expect(await screen.findByText("4.25")).toBeInTheDocument();

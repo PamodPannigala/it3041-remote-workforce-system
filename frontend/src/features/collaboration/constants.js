@@ -1,0 +1,1 @@
+export const TEAM_MESSAGE_MAX_LENGTH = 1000;
