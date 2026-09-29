@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 from pymongo.errors import DuplicateKeyError
 
 from backend.app.main import app
+from backend.app.core.rate_limiting import limiter
 
 
 TEST_JWT_SECRET = "test-secret-key-that-is-at-least-32-bytes-long-for-hs256-testing!!"
@@ -189,6 +190,13 @@ class FakeAsyncDatabase:
 def isolated_jwt_secret(monkeypatch):
     # Ensure tests always run with an isolated test JWT secret
     monkeypatch.setenv("JWT_SECRET_KEY", TEST_JWT_SECRET)
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limit_storage():
+    limiter.reset()
+    yield
+    limiter.reset()
 
 
 @pytest.fixture

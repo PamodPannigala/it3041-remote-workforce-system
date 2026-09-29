@@ -3,6 +3,7 @@ from bson import ObjectId
 from fastapi.testclient import TestClient
 import jwt
 import pytest
+from pymongo.errors import PyMongoError
 
 from backend.app.main import app
 from backend.app.core.security import (
@@ -92,6 +93,23 @@ def test_login_unknown_user(test_setup):
     assert response.status_code == 401
     assert response.headers.get("WWW-Authenticate") == "Bearer"
     assert response.json()["detail"] == "Invalid email or password"
+
+
+def test_login_returns_503_when_database_is_unavailable(test_setup, monkeypatch):
+    client, fake_db = test_setup
+
+    async def fail_find_one(*args, **kwargs):
+        raise PyMongoError("database unavailable")
+
+    monkeypatch.setattr(fake_db["users"], "find_one", fail_find_one)
+
+    response = client.post(
+        "/auth/login",
+        json={"email": "user@example.com", "password": "ValidPassword12345!"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Authentication service is temporarily unavailable"
 
 
 def test_login_inactive_user(test_setup):

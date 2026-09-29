@@ -7,6 +7,9 @@
 
 :root {
   color-scheme: light;
+  --app-canvas: #f5f7fa;
+  --app-ink: #172033;
+  --app-focus: #2563eb;
 }
 
 html {
@@ -15,8 +18,8 @@ html {
 
 body {
   font-family: var(--font-sans);
-  background-color: #f6f8fc;
-  color: #0f172a;
+  background-color: var(--app-canvas);
+  color: var(--app-ink);
   min-height: 100vh;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
@@ -98,6 +101,24 @@ button:disabled {
 .auth-primary-button:focus-visible {
   outline: 2px solid #4f46e5;
   outline-offset: 3px;
+}
+
+::selection {
+  color: #0f172a;
+  background: #bfdbfe;
+}
+
+:focus-visible {
+  outline: 2px solid var(--app-focus);
+  outline-offset: 2px;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* Custom Scrollbars */

@@ -1050,6 +1050,20 @@ class AgentRuntime:
                 safe_error_message="LLM output schema does not conform to expected format",
             )
 
+        if target_agent == "wellbeing" and wb_metrics:
+            selected_team_aggregates = [
+                aggregate
+                for aggregate in wb_metrics.weekly_aggregates
+                if request.target_team_id is None or aggregate.team_id == request.target_team_id
+            ]
+            if len(selected_team_aggregates) == 1:
+                aggregate = selected_team_aggregates[0]
+                finding = finding.model_copy(update={
+                    "sentiment_score": aggregate.sentiment_score,
+                    "sentiment_label": aggregate.sentiment_label,
+                    "sentiment_qualifying_comment_count": aggregate.sentiment_qualifying_count,
+                })
+
         # Check the original output before removing unsupported domain claims.
         raw_policy = validate_responsible_ai_guardrails(
             agent=target_agent, intent=request.intent, finding=finding,
