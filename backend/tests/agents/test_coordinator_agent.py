@@ -136,6 +136,39 @@ async def test_route_productivity_analysis(
 
 
 @pytest.mark.asyncio
+async def test_orchestrate_blocks_sentiment_bearing_wellbeing_dependency_from_assignment(
+    test_coordinator: AgentCoordinator,
+    manager_principal: AuthenticatedPrincipal,
+):
+    correlation_id = str(uuid.uuid4())
+    sentiment_finding = AgentFinding(
+        agent="productivity",
+        summary="Team sentiment is Positive (+0.60), based on 3 qualifying comments.",
+        confidence=0.9,
+        limitations=[],
+        recommended_actions=[],
+        correlation_id=correlation_id,
+        sentiment_score=0.6,
+        sentiment_label="Positive",
+        sentiment_qualifying_comment_count=3,
+    )
+    request = CoordinatorExecutionRequest(
+        correlation_id=correlation_id,
+        authenticated_principal=manager_principal,
+        question="Who should receive this task?",
+        target_team_id="team-alpha",
+        target_task_id="task-123",
+        dependency_findings=[sentiment_finding],
+    )
+
+    result = await test_coordinator._orchestrate(request)
+
+    assert result.status == "failed"
+    assert result.intent == "task_assignment_recommendation"
+    assert result.errors[0]["error_code"] == "WELLBEING_TASK_ASSIGNMENT_FORBIDDEN"
+
+
+@pytest.mark.asyncio
 async def test_route_collaboration_analysis(
     test_coordinator: AgentCoordinator,
     manager_principal: AuthenticatedPrincipal,

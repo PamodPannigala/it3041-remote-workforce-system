@@ -1268,10 +1268,17 @@ class AgentCoordinator:
                 )
 
         # 6. Validate Dependency Findings & Strict Wellbeing Isolation
+        # Wellbeing findings carry aggregate sentiment data alongside numeric metrics.
+        # Both are blocked from flowing into task assignment decisions.
         if effective_request.dependency_findings:
             if detected_intent == "task_assignment_recommendation":
                 for dep in effective_request.dependency_findings:
-                    if dep.agent == "wellbeing":
+                    carries_sentiment = any((
+                        dep.sentiment_score is not None,
+                        dep.sentiment_label is not None,
+                        dep.sentiment_qualifying_comment_count is not None,
+                    ))
+                    if dep.agent == "wellbeing" or carries_sentiment:
                         await self._record_audit(
                             create_policy_audit_event(
                                 correlation_id=correlation_id,
@@ -1832,11 +1839,18 @@ class AgentCoordinator:
                 safe_error_message=cap_auth.safe_message,
             )
 
-        # Enforce Task Assignment dependency boundaries
+        # Enforce Task Assignment dependency boundaries.
+        # Wellbeing findings — which carry aggregate sentiment data alongside numeric
+        # pulse metrics — are unconditionally blocked from reaching task_assigning.
         prereq_deps = list(request.dependency_findings)
         if target_agent == "task_assigning" and prereq_deps:
             for dep in prereq_deps:
-                if dep.agent == "wellbeing":
+                carries_sentiment = any((
+                    dep.sentiment_score is not None,
+                    dep.sentiment_label is not None,
+                    dep.sentiment_qualifying_comment_count is not None,
+                ))
+                if dep.agent == "wellbeing" or carries_sentiment:
                     return create_agent_response(
                         correlation_id=correlation_id,
                         sender=target_agent,

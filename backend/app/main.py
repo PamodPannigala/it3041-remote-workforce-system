@@ -1,8 +1,15 @@
 from contextlib import asynccontextmanager
+import logging
+import os
+from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from starlette.middleware.cors import CORSMiddleware
 from pymongo.errors import PyMongoError
 
 from backend.app.db.database import create_database_client
@@ -27,6 +34,11 @@ from backend.app.modules.information_retrieval.router import (
 from backend.app.modules.agents.router import router as agents_router
 from backend.app.modules.agents.coordinator import create_production_coordinator
 from backend.app.modules.agents.llm_gateway import LLMConfigurationError
+from backend.app.core.rate_limiting import limiter
+from backend.app.core.security_headers import SecurityHeadersMiddleware
+
+logger = logging.getLogger(__name__)
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", encoding="utf-8-sig")
 
 
 
@@ -98,6 +110,39 @@ app = FastAPI(
     title="Remote Workforce API",
     version="0.1.0",
     lifespan=lifespan,
+)
+app.state.limiter = limiter
+
+
+def _configured_origins() -> list[str]:
+    configured = os.getenv("ALLOWED_ORIGINS")
+    if not configured:
+        return ["http://localhost:5173"]
+    origins = [origin.strip().rstrip("/") for origin in configured.split(",") if origin.strip()]
+    if not origins or "*" in origins:
+        raise RuntimeError("ALLOWED_ORIGINS must contain explicit origins and cannot include '*'")
+    return origins
+
+
+@app.exception_handler(RateLimitExceeded)
+def rate_limit_exception_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Too many requests. Please try again later."},
+    )
+
+
+app.add_middleware(SlowAPIMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_configured_origins(),
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=False,
+)
+app.add_middleware(
+    SecurityHeadersMiddleware,
+    enable_hsts=os.getenv("ENABLE_HSTS", "false").strip().lower() in {"1", "true", "yes"},
 )
 
 

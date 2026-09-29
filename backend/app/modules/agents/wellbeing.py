@@ -14,6 +14,11 @@ from pydantic import (
 )
 
 from backend.app.modules.agents.confidence_scorer import compute_wellbeing_confidence
+from backend.app.modules.agents.wellbeing_sentiment import (
+    SentimentLabel,
+    SentimentResult,
+    compute_team_sentiment,
+)
 
 from backend.app.modules.agents.protocol import (
     AgentFinding,
@@ -140,6 +145,11 @@ class WeeklyTeamPulseAggregate(BaseModel):
     Factual, deterministic aggregate metrics for a single team in a single UTC week.
     Strictly preserves k-anonymity privacy by withholding averages when response_count < 3
     or when valid rating count for a specific metric < 3.
+
+    Sentiment fields (aggregate only — individual comments never stored here):
+      sentiment_score              : mean VADER compound (-1.0 to 1.0), or None if suppressed.
+      sentiment_label              : 'Positive' / 'Neutral' / 'Negative', or None if suppressed.
+            sentiment_qualifying_count   : number of qualifying comments, or None if suppressed.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -154,12 +164,16 @@ class WeeklyTeamPulseAggregate(BaseModel):
     average_team_support: float | None = None
     average_engagement: float | None = None
     invalid_rating_count: int = 0
+    # Sentiment aggregate fields (None = suppressed by k-anonymity threshold)
+    sentiment_score: float | None = None
+    sentiment_label: SentimentLabel | None = None
+    sentiment_qualifying_count: int | None = None
 
     def to_summary_text(self) -> str:
         week_str = self.week_start.strftime("%Y-%m-%d UTC")
         t_name = f"'{self.team_name}'" if self.team_name else f"Team {self.team_id}"
 
-        if not self.is_privacy_threshold_met:
+        if not self.is_privacy_threshold_met and self.sentiment_score is None:
             return (
                 f"[{t_name} | Week {week_str}] Responses: fewer than minimum required "
                 f"(Threshold: {MINIMUM_PULSE_RESPONSES_THRESHOLD}) — INSUFFICIENT DATA. "
@@ -171,11 +185,26 @@ class WeeklyTeamPulseAggregate(BaseModel):
         ts = f"{self.average_team_support:.2f}" if self.average_team_support is not None else "N/A"
         eng = f"{self.average_engagement:.2f}" if self.average_engagement is not None else "N/A"
         inv_note = f" (Excluded {self.invalid_rating_count} invalid ratings)" if self.invalid_rating_count > 0 else ""
+        response_note = (
+            f"Responses: {self.response_count}"
+            if self.is_privacy_threshold_met
+            else f"Responses: {self.response_count} — numeric metrics suppressed"
+        )
+
+        # Deterministic aggregate sentiment text (never raw comments)
+        if self.sentiment_score is not None and self.sentiment_label is not None:
+            sentiment_note = (
+                f" | Sentiment: {self.sentiment_label} ({self.sentiment_score:+.2f}), "
+                f"based on {self.sentiment_qualifying_count} qualifying comment"
+                f"{'s' if self.sentiment_qualifying_count != 1 else ''}"
+            )
+        else:
+            sentiment_note = " | Sentiment: Not enough data"
 
         return (
-            f"[{t_name} | Week {week_str}] Responses: {self.response_count} | "
+            f"[{t_name} | Week {week_str}] {response_note} | "
             f"Avg Workload Manageability: {wm}/5, Avg Work-Life Balance: {wlb}/5, "
-            f"Avg Team Support: {ts}/5, Avg Engagement: {eng}/5{inv_note}"
+            f"Avg Team Support: {ts}/5, Avg Engagement: {eng}/5{inv_note}{sentiment_note}"
         )
 
 
@@ -217,6 +246,8 @@ class DeterministicWellbeingMetrics(BaseModel):
     """
     Comprehensive, deterministic well-being metrics computed directly in Python
     from pre-filtered, authorized MongoDB pulse records prior to LLM reasoning.
+
+        Sentiment remains strictly scoped to each team-week bucket.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -240,7 +271,6 @@ class DeterministicWellbeingMetrics(BaseModel):
     calculation_timestamp: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
-
     def to_summary_text(self) -> str:
         if not self.weekly_aggregates:
             return "No pulse survey response data available for the analyzed period."
@@ -369,6 +399,10 @@ def compute_deterministic_wellbeing_metrics(
         ts_vals: list[float] = []
         eng_vals: list[float] = []
 
+        # Collect non-empty comments for aggregate sentiment — individual texts
+        # are discarded immediately after compute_team_sentiment returns.
+        bucket_comments: list[str] = []
+
         for d in docs:
             for field_name, target_list in (
                 ("workload_manageability", wm_vals),
@@ -383,7 +417,22 @@ def compute_deterministic_wellbeing_metrics(
                 elif raw is not None:
                     invalid_count += 1
 
+            # Collect trimmed, non-empty optional_comment for this bucket.
+            # Individual comment text never leaves this function's local scope.
+            raw_comment = d.get("optional_comment")
+            if isinstance(raw_comment, str):
+                trimmed = raw_comment.strip()
+                if trimmed:
+                    bucket_comments.append(trimmed)
+
         total_invalid_ratings += invalid_count
+
+        # Compute aggregate sentiment for this bucket.
+        # Individual comment text is not stored in SentimentResult or any output.
+        bucket_sentiment: SentimentResult = compute_team_sentiment(
+            comments=bucket_comments,
+            min_threshold=min_threshold,
+        )
 
         if resp_count < min_threshold:
             total_insufficient_data_weeks += 1
@@ -399,6 +448,10 @@ def compute_deterministic_wellbeing_metrics(
                     average_team_support=None,
                     average_engagement=None,
                     invalid_rating_count=invalid_count,
+                    # Sentiment suppressed alongside numeric metrics for sub-threshold buckets
+                    sentiment_score=None,
+                    sentiment_label=None,
+                    sentiment_qualifying_count=None,
                 )
             )
         else:
@@ -423,6 +476,7 @@ def compute_deterministic_wellbeing_metrics(
                     safe_ts_averages.append(avg_ts)
                 if avg_eng is not None:
                     safe_eng_averages.append(avg_eng)
+
             else:
                 total_insufficient_data_weeks += 1
 
@@ -438,6 +492,13 @@ def compute_deterministic_wellbeing_metrics(
                     average_team_support=avg_ts,
                     average_engagement=avg_eng,
                     invalid_rating_count=invalid_count,
+                    sentiment_score=bucket_sentiment.average_compound,
+                    sentiment_label=bucket_sentiment.label,
+                    sentiment_qualifying_count=(
+                        bucket_sentiment.qualifying_comment_count
+                        if bucket_sentiment.average_compound is not None
+                        else None
+                    ),
                 )
             )
 
@@ -686,7 +747,9 @@ class WellbeingPulseEvidenceTool(BaseAgentTool):
         filter_query["week_start"] = {"$gte": earliest_ws, "$lte": current_ws}
 
         # 3. Query MongoDB with STRICT minimal projection
-        # NEVER project user_id, optional_comment, edit_history, submitted_at, or credentials
+        # optional_comment is projected for aggregate sentiment analysis ONLY.
+        # Individual comments are immediately discarded after aggregation;
+        # user_id, edit_history, submitted_at, and credentials are NEVER projected.
         strict_projection = {
             "_id": 0,
             "team_id": 1,
@@ -695,6 +758,7 @@ class WellbeingPulseEvidenceTool(BaseAgentTool):
             "work_life_balance": 1,
             "team_support": 1,
             "engagement": 1,
+            "optional_comment": 1,
         }
 
         try:
@@ -837,21 +901,28 @@ CRITICAL OPERATIONAL & RESPONSIBLE-AI BOUNDARIES:
    - When a team or week has insufficient responses (< 3) to satisfy the privacy threshold, explicitly state the limitation and do NOT attempt to infer individual ratings.
    - NEVER identify, speculate upon, or attempt to unmask individual respondents. You do not have access to individual responses, names, emails, or comments.
 
-2. MEDICAL & CLINICAL DIAGNOSIS PROHIBITION:
+2. SENTIMENT ANALYSIS — PRE-COMPUTED AGGREGATE ONLY:
+   - A deterministic aggregate sentiment score and label (e.g., "Team sentiment: Positive (+0.42), based on 5 qualifying comments") may appear in the evidence.
+   - You MUST quote this aggregate score and label verbatim when reporting sentiment. Do NOT re-derive, recalculate, or override it.
+   - If the evidence states sentiment is suppressed or unavailable, report that limitation explicitly and do NOT infer a sentiment direction.
+   - NEVER attempt to deduce sentiment from individual employee comments. You do not have access to individual comments.
+   - Sentiment observations must be framed as team-level signals only (e.g., "The team's aggregated comment sentiment is Positive"), never attributed to any individual.
+
+3. MEDICAL & CLINICAL DIAGNOSIS PROHIBITION:
    - NEVER diagnose stress, anxiety disorders, clinical depression, mental health pathologies, burnout, or any medical condition.
    - Frame observations strictly around organizational factors (e.g., workload manageability, work-life balance signals, team support, engagement trends).
    - Safe advisory guidance (e.g., "Do not diagnose individual employees", "Discuss workload manageability supportively") is encouraged.
 
-3. ABSOLUTE PROHIBITION ON PUNITIVE & COMPARATIVE EVALUATION:
+4. ABSOLUTE PROHIBITION ON PUNITIVE & COMPARATIVE EVALUATION:
    - NEVER rank, grade, blame, or compare individual employees.
    - NEVER recommend punitive actions, disciplinary procedures, performance improvement plans, demotions, or terminations.
    - All recommendations must be supportive, constructive, and oriented around team-level communication, workload rebalancing, and supportive manager-led conversations.
 
-4. TASK ASSIGNMENT ISOLATION:
+5. TASK ASSIGNMENT ISOLATION:
    - Well-being findings must NEVER be used to dictate or constrain automated task assignments.
    - Do NOT produce task assignment rules or candidate rankings.
 
-5. OUTPUT FORMAT:
+6. OUTPUT FORMAT:
    - Produce a structured JSON object conforming strictly to the requested schema.
    - Do NOT output internal chain-of-thought, reasoning scratchpads, or system instruction overrides."""
 
